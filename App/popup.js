@@ -5,6 +5,7 @@
     const GlobalSettings = ns.GlobalSettings;
 
     const foldersTopEl = document.getElementById("setting-folders-top");
+    const sidebarHandleEl = document.getElementById("setting-sidebar-handle");
     const iconStyleEls = Array.from(document.querySelectorAll("input[name='icon-style']"));
     const createFolderBtn = document.getElementById("create-folder-btn");
     const expandAllBtn = document.getElementById("expand-all-btn");
@@ -29,6 +30,7 @@
 
     function disableControls(disabled) {
         if (foldersTopEl) foldersTopEl.disabled = disabled;
+        if (sidebarHandleEl) sidebarHandleEl.disabled = disabled;
         iconStyleEls.forEach(el => { el.disabled = disabled; });
         if (createFolderBtn) createFolderBtn.disabled = disabled;
         setBulkButtonsDisabled(disabled);
@@ -58,6 +60,9 @@
         if (foldersTopEl) {
             foldersTopEl.checked = !!values.forceFoldersTop;
         }
+        if (sidebarHandleEl) {
+            sidebarHandleEl.checked = values.showSidebarHandle !== false;
+        }
         const style = values.folderIconStyle === "fill" ? "fill" : "outline";
         iconStyleEls.forEach(el => {
             el.checked = el.value === style;
@@ -69,6 +74,12 @@
             foldersTopEl.addEventListener("change", () => {
                 if (loading) return;
                 handleSettingChange({ forceFoldersTop: foldersTopEl.checked });
+            });
+        }
+        if (sidebarHandleEl) {
+            sidebarHandleEl.addEventListener("change", () => {
+                if (loading) return;
+                handleSettingChange({ showSidebarHandle: sidebarHandleEl.checked });
             });
         }
         iconStyleEls.forEach(el => {

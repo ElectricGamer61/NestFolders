@@ -8,7 +8,8 @@
             this.key = "globalSettings";
             this.values = {
                 forceFoldersTop: false,
-                folderIconStyle: "outline"
+                folderIconStyle: "outline",
+                showSidebarHandle: true
             };
         }
 
@@ -54,6 +55,9 @@
             if (Object.prototype.hasOwnProperty.call(partial, "folderIconStyle")) {
                 this.values.folderIconStyle = this._normalizeIconStyle(partial.folderIconStyle);
             }
+            if (Object.prototype.hasOwnProperty.call(partial, "showSidebarHandle")) {
+                this.values.showSidebarHandle = !!partial.showSidebarHandle;
+            }
             return this.save();
         }
 
@@ -63,6 +67,15 @@
 
         _normalizeIconStyle(style) {
             return style === "fill" ? "fill" : "outline";
+        }
+
+        getShowSidebarHandle() {
+            return !!this.values.showSidebarHandle;
+        }
+
+        setShowSidebarHandle(value) {
+            this.values.showSidebarHandle = !!value;
+            return this.save();
         }
     }
 

@@ -18,6 +18,7 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
     const SIDEBAR_WIDTH_VAR = "--sidebar-width";
     const ENABLE_SIDEBAR_RESIZER = true;
     const ENABLE_SAFE_REINIT = true;
+    const DEFAULT_SHOW_SIDEBAR_HANDLE = true;
 
     let historyDiv = null;
     let historyManager = null;
@@ -93,6 +94,14 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
                 sidebarContainer.style.position = "";
                 delete sidebarContainer.dataset.glynSidebarPrevPos;
             }
+            if (sidebarContainer.dataset && Object.prototype.hasOwnProperty.call(sidebarContainer.dataset, "glynSidebarPrevPad")) {
+                sidebarContainer.style.paddingRight = sidebarContainer.dataset.glynSidebarPrevPad;
+                delete sidebarContainer.dataset.glynSidebarPrevPad;
+            }
+            if (sidebarContainer.dataset && Object.prototype.hasOwnProperty.call(sidebarContainer.dataset, "glynSidebarPrevBox")) {
+                sidebarContainer.style.boxSizing = sidebarContainer.dataset.glynSidebarPrevBox;
+                delete sidebarContainer.dataset.glynSidebarPrevBox;
+            }
         }
         sidebarContainer = null;
     }
@@ -113,6 +122,14 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
             container.dataset.glynSidebarPrevPos = "applied";
             container.style.position = "relative";
         }
+        if (!Object.prototype.hasOwnProperty.call(container.dataset, "glynSidebarPrevPad")) {
+            container.dataset.glynSidebarPrevPad = container.style.paddingRight || "";
+        }
+        container.style.paddingRight = "14px";
+        if (!Object.prototype.hasOwnProperty.call(container.dataset, "glynSidebarPrevBox")) {
+            container.dataset.glynSidebarPrevBox = container.style.boxSizing || "";
+        }
+        container.style.boxSizing = "border-box";
         container.classList.add("glyn-sidebar-resizable");
         if (!sidebarResizerEl) {
             const handle = document.createElement("div");
@@ -201,6 +218,13 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
         if (folderManager && typeof folderManager.refreshAllFolderIcons === "function") {
             folderManager.refreshAllFolderIcons();
         }
+        const showHandle = globalSettings
+            ? globalSettings.getShowSidebarHandle()
+            : DEFAULT_SHOW_SIDEBAR_HANDLE;
+        const root = document.documentElement;
+        if (root) {
+            root.classList.toggle("glyn-sidebar-handle-visible", !!showHandle);
+        }
         if (options && options.persist) {
             scheduleSave({ immediate: true });
         }
@@ -266,6 +290,9 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
                 }
                 if (Object.prototype.hasOwnProperty.call(payload, "folderIconStyle")) {
                     updates.folderIconStyle = payload.folderIconStyle === "fill" ? "fill" : "outline";
+                }
+                if (Object.prototype.hasOwnProperty.call(payload, "showSidebarHandle")) {
+                    updates.showSidebarHandle = !!payload.showSidebarHandle;
                 }
                 if (!Object.keys(updates).length) {
                     if (sendResponse) sendResponse({ ok: true });
