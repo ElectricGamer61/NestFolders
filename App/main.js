@@ -38,6 +38,7 @@
     let sidebarResizerEl = null;
     let sidebarResizeSession = null;
     let sentinelObserver = null;
+    let shortcutHandlerBound = false;
 
     function scheduleSave(opts) {
         if (layoutState) {
@@ -522,6 +523,24 @@
         }
     }
 
+    function handleGlobalShortcuts(event) {
+        if (!folderManager) return;
+        const active = document.activeElement;
+        if (active) {
+            const tag = (active.tagName || "").toLowerCase();
+            if (tag === "input" || tag === "textarea" || active.isContentEditable) {
+                return;
+            }
+        }
+        if (event.ctrlKey && event.key === "\\") {
+            event.preventDefault();
+            const changed = folderManager.setAllFoldersExpanded(false);
+            if (changed) {
+                scheduleSave({ immediate: true });
+            }
+        }
+    }
+
     function startContainerMonitor() {
         if (!ENABLE_SAFE_REINIT) return;
         stopContainerMonitor();
@@ -639,6 +658,10 @@
             setupSidebarResizer();
         }
         ensureMessageListener();
+        if (!shortcutHandlerBound) {
+            document.addEventListener("keydown", handleGlobalShortcuts, true);
+            shortcutHandlerBound = true;
+        }
         globalSettings.load()
             .then(() => applyGlobalSettings())
             .catch(() => applyGlobalSettings());

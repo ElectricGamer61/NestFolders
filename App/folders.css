@@ -10,6 +10,15 @@
   opacity: 1;
 }
 
+.glyn-folder-row {
+  border-radius: 8px;
+  margin-left: 5px;
+}
+
+.glyn-folder-row:hover {
+  background: #2f2f2f;
+}
+
 /* Inline rename styling */
 .glyn-folder-label-editing {
   outline: 1px solid rgba(255, 255, 255, 0.35);
