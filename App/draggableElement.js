@@ -81,6 +81,15 @@
             }
 
             const source = DraggableElement.currentDrag;
+            if (source === this) {
+                if (DraggableElement.hideDropMarker) {
+                    DraggableElement.hideDropMarker();
+                }
+                if (this.type === "folder" && DraggableElement.unhighlightDropTarget) {
+                    DraggableElement.unhighlightDropTarget(this.el);
+                }
+                return;
+            }
 
             // Chat hovering folders: support before/after insertion zones
             if (this.type === "folder" && (source.type === "chat" || source.type === "folder")) {

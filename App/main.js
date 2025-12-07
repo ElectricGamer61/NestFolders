@@ -331,11 +331,13 @@
         if (dropMarker) return;
         dropMarker = document.createElement("div");
         dropMarker.id = "glyn-drop-marker";
-        dropMarker.style.height = "12px";
-        dropMarker.style.margin = "2px 0";
-        dropMarker.style.borderTop = "2px solid #999";
-        dropMarker.style.borderRadius = "0";
+        dropMarker.style.height = "20px";
+        dropMarker.style.margin = "4px 0 4px 6px";
+        dropMarker.style.background = "transparent";
+        dropMarker.style.border = "1px dashed rgba(255, 255, 255, 0.2)";
+        dropMarker.style.borderRadius = "8px";
         dropMarker.style.boxSizing = "border-box";
+        dropMarker.style.opacity = "1";
         dropMarker.addEventListener("dragover", onDropMarkerDragOver);
         dropMarker.addEventListener("drop", onDropMarkerDrop);
     }
