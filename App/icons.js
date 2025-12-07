@@ -43,6 +43,17 @@
         '<path d="M3 5.5h10M6.5 3h3L10 3.8h-4z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>' +
         '</svg>';
 
+    const folderExpandAll =
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<path d="M6 4h12M6 8h12M6 16h12M6 20h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>' +
+        '<path d="M6 12h12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>' +
+        '</svg>';
+
+    const folderCollapseAll =
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">' +
+        '<path d="M6 6h12M10 10h8M6 14h12M10 18h8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>' +
+        '</svg>';
+
     // --- Folder icons for the sidebar ---
 
     // Full-colour folder (uses currentColor so we can tint it later if we want)
@@ -65,6 +76,8 @@
         folderNew,
         folderRename,
         folderColor,
+        folderExpandAll,
+        folderCollapseAll,
         folderDelete,
         folderFullColor,
         folderOutline

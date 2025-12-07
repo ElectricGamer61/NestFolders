@@ -1,7 +1,4 @@
 // @meta main.js bootstraps the content script, wiring managers, drag logic, and storage sync.
-const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at top" mode
-// 
-
 (function () {
     const ns = (window.GlynGPT = window.GlynGPT || {});
     const DraggableElement = ns.DraggableElement;
@@ -14,7 +11,7 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
     const GlobalSettings = ns.GlobalSettings;
     const LayoutState = ns.LayoutState;
     const SIDEBAR_MIN_WIDTH = 220;
-    const SIDEBAR_MAX_WIDTH = 520;
+    const SIDEBAR_MAX_RATIO = 0.9; // 90% of viewport width
     const SIDEBAR_WIDTH_VAR = "--sidebar-width";
     const ENABLE_SIDEBAR_RESIZER = true;
     const ENABLE_SAFE_REINIT = true;
@@ -77,7 +74,16 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
             root.style.removeProperty(SIDEBAR_WIDTH_VAR);
             return;
         }
-        const clamped = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, width));
+        let clamped = width;
+        if (typeof SIDEBAR_MIN_WIDTH === "number") {
+            clamped = Math.max(SIDEBAR_MIN_WIDTH, clamped);
+        }
+        if (typeof SIDEBAR_MAX_RATIO === "number" && SIDEBAR_MAX_RATIO > 0) {
+            const vwLimit = Math.floor(window.innerWidth * Math.min(SIDEBAR_MAX_RATIO, 1));
+            if (vwLimit > 0) {
+                clamped = Math.min(vwLimit, clamped);
+            }
+        }
         removeInline();
         root.style.setProperty(SIDEBAR_WIDTH_VAR, `${clamped}px`);
     }
@@ -183,36 +189,12 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
     }
 
     function enforceFoldersTopOrder() {
-        if (!globalSettings || !globalSettings.getForceFoldersTop()) return;
-        if (!folderManager || !historyDiv) return;
-        const wrappers = folderManager.folders
-            .map(rec => rec && rec.wrapperEl)
-            .filter(el => el && el.parentNode === historyDiv);
-        if (!wrappers.length) return;
-        const fragment = document.createDocumentFragment();
-        wrappers.forEach(wrapper => fragment.appendChild(wrapper));
-        const children = Array.from(historyDiv.children);
-        const beforeNode = children.find(node =>
-            node &&
-            !(node.classList && node.classList.contains("glyn-folder-wrapper"))
-        ) || null;
-        if (beforeNode) {
-            historyDiv.insertBefore(fragment, beforeNode);
-        } else {
-            historyDiv.appendChild(fragment);
-        }
+        if (!folderManager || typeof folderManager.pinFoldersAtTop !== "function") return;
+        folderManager.pinFoldersAtTop();
     }
 
     function applyGlobalSettings(options) {
-        const forceTop = globalSettings
-            ? globalSettings.getForceFoldersTop()
-            : FORCE_FOLDERS_AT_TOP;
-        if (dragController && typeof dragController.setForceFoldersTop === "function") {
-            dragController.setForceFoldersTop(forceTop);
-        }
-        if (forceTop) {
-            enforceFoldersTopOrder();
-        }
+        enforceFoldersTopOrder();
         const style = globalSettings ? globalSettings.getFolderIconStyle() : "outline";
         window.FOLDER_ICON_STYLE = style;
         if (folderManager && typeof folderManager.refreshAllFolderIcons === "function") {
@@ -285,9 +267,6 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
                 }
                 const payload = message.payload || {};
                 const updates = {};
-                if (Object.prototype.hasOwnProperty.call(payload, "forceFoldersTop")) {
-                    updates.forceFoldersTop = !!payload.forceFoldersTop;
-                }
                 if (Object.prototype.hasOwnProperty.call(payload, "folderIconStyle")) {
                     updates.folderIconStyle = payload.folderIconStyle === "fill" ? "fill" : "outline";
                 }
@@ -502,11 +481,16 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
             const item = new ChatItem(link, href, title);
             link.__glynChatItem = item;
             item.enableDrag();
+            if (layoutState && typeof layoutState.tryHydrateChat === "function") {
+                layoutState.tryHydrateChat(item);
+            }
         });
     }
 
     function observeHistory() {
         makeRootLinksDraggable();
+        enforceFoldersTopOrder();
+        observeHistory();
 
         if (historyObserver) {
             historyObserver.disconnect();
@@ -514,6 +498,15 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
 
         historyObserver = new MutationObserver(() => {
             makeRootLinksDraggable();
+            if (folderManager) {
+                if (typeof folderManager.removeDuplicateWrappers === "function") {
+                    folderManager.removeDuplicateWrappers();
+                }
+                if (typeof folderManager.ensureFolderMounts === "function") {
+                    folderManager.ensureFolderMounts();
+                }
+            }
+            enforceFoldersTopOrder();
         });
 
         historyObserver.observe(historyDiv, {
@@ -625,12 +618,15 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
         historyManager = new HistoryManager();
         folderMenu = new FolderMenu();
         folderManager = new FolderManager(historyDiv, historyManager, folderMenu);
+        ns.folderManager = folderManager;
+        ns.historyManager = historyManager;
+        ns.historyDiv = historyDiv;
         dragController = new DragController(
             historyDiv,
             historyManager,
-            folderManager,
-            FORCE_FOLDERS_AT_TOP
+            folderManager
         );
+        ns.dragController = dragController;
 
         storageService = new StorageService({
             area: "sync",
@@ -638,6 +634,7 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
         });
         globalSettings = new GlobalSettings(storageService);
         layoutState = new LayoutState(storageService, folderManager, historyManager);
+        ns.layoutState = layoutState;
         if (ENABLE_SIDEBAR_RESIZER) {
             setupSidebarResizer();
         }
@@ -684,6 +681,16 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
             }
             // Persistence handled via layout state change handlers
         };
+        folderMenu.onExpandAll = () => {
+            if (folderManager.setAllFoldersExpanded(true)) {
+                scheduleSave({ immediate: true });
+            }
+        };
+        folderMenu.onCollapseAll = () => {
+            if (folderManager.setAllFoldersExpanded(false)) {
+                scheduleSave({ immediate: true });
+            }
+        };
         folderMenu.onDelete = (folderItem) => {
             folderManager.deleteFolder(folderItem);
         };
@@ -708,9 +715,7 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
             const onStructureChange = (reason) => {
                 const immediate = immediateReasons.has(reason);
                 scheduleSave(immediate ? { immediate: true } : undefined);
-                if (globalSettings && globalSettings.getForceFoldersTop()) {
-                    enforceFoldersTopOrder();
-                }
+                enforceFoldersTopOrder();
             };
             folderManager.setChangeHandler(onStructureChange);
             historyManager.setChangeHandler(onStructureChange);
@@ -735,7 +740,7 @@ const FORCE_FOLDERS_AT_TOP = false; // set true later if you want "folders at to
                     }
                 }
                 bindChangeHandlers();
-                observeHistory();
+                enforceFoldersTopOrder();
                 monitorLazyLoadSentinel();
                 startContainerMonitor();
                 exitSafeMode();

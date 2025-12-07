@@ -12,6 +12,8 @@
       this.onNew = null;
       this.onRename = null;
       this.onChangeColor = null;
+      this.onExpandAll = null;
+      this.onCollapseAll = null;
       this.onDelete = null;
 
       this.colorRow = null;
@@ -43,6 +45,14 @@
         <button type="button" data-action="color">
           <span class="glyn-folder-menu-icon">${Icons.folderColor || ""}</span>
           <span>Change color</span>
+        </button>
+        <button type="button" data-action="expand-all">
+          <span class="glyn-folder-menu-icon">${Icons.folderExpandAll || ""}</span>
+          <span>Expand all folders</span>
+        </button>
+        <button type="button" data-action="collapse-all">
+          <span class="glyn-folder-menu-icon">${Icons.folderCollapseAll || ""}</span>
+          <span>Collapse all folders</span>
         </button>
       `;
 
@@ -211,6 +221,12 @@
       } else if (action === "color") {
         this.openColorPickerForFolder(folder);
         // Don't close the menu; user still needs to click the colour swatch
+      } else if (action === "expand-all" && typeof this.onExpandAll === "function") {
+        this.onExpandAll(folder);
+        this.close();
+      } else if (action === "collapse-all" && typeof this.onCollapseAll === "function") {
+        this.onCollapseAll(folder);
+        this.close();
       } else if (action === "delete" && typeof this.onDelete === "function") {
         this.onDelete(folder);
         this.close();

@@ -18,13 +18,11 @@ All stored data is kept inside `chrome.storage.sync`, allowing your folder struc
 These are simple UI preference values such as:
 
 - folder icon style
-- whether folders appear at the top
 
 Example:
 `{
   "globalSettings": {
-    "folderIconStyle": "fill",
-    "forceFoldersTop": false
+    "folderIconStyle": "fill"
   }
 }
 `

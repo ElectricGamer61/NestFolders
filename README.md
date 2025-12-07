@@ -9,7 +9,7 @@ A Chrome extension to organise your ChatGPT conversations into folders and bring
 - 🧲 Drag-and-drop conversations anywhere in the sidebar for total ordering control.
 - 🗂️ Create folders with unlimited nesting (folders within folders) and inline rename.
 - 🎨 Change folder appearance and colour using the built-in picker.
-- 📌 Keep folders pinned at the top, or allow fully custom sorting.
+- 📌 Folders stay pinned at the top for instant access while chats retain their native order.
 - 🔄 Sync folder structure automatically across Chrome sessions.
 - 🔐 Full respect for user privacy and conversation history (details below).
 <br><br>

@@ -1,0 +1,199 @@
+{
+  "globalSettings": {
+    "folderIconStyle": "fill",
+    "forceFoldersTop": false
+  },
+  "layout": {
+    "items": [
+      {
+        "id": "/c/69331686-a558-8325-b257-5a45d8f5f1d8",
+        "type": "chat"
+      },
+      {
+        "id": "/c/6932f071-7c20-832f-8395-a9b3d2041ad7",
+        "type": "chat"
+      },
+      {
+        "children": [
+          {
+            "id": "/c/692ed171-a164-8330-b114-24a89a32e3b7",
+            "type": "chat"
+          },
+          {
+            "id": "/c/692b5336-52dc-8333-bd18-a3ad65458002",
+            "type": "chat"
+          },
+          {
+            "id": "/c/69285637-5d3c-832a-9e3e-13e77bf9a513",
+            "type": "chat"
+          },
+          {
+            "id": "/c/692ef86e-c854-832b-8c5f-211977ff42f3",
+            "type": "chat"
+          }
+        ],
+        "color": "#598ab1",
+        "expanded": false,
+        "id": "folder-4",
+        "name": "FLAMBOG",
+        "type": "folder"
+      },
+      {
+        "children": [
+          {
+            "id": "/c/692794c3-bd10-8325-b12e-77e530c86a7f",
+            "type": "chat"
+          },
+          {
+            "id": "/c/6929b48e-52fc-832d-a951-1454a1938e69",
+            "type": "chat"
+          }
+        ],
+        "color": "#c800ff",
+        "expanded": false,
+        "id": "folder-5",
+        "name": "Introspection",
+        "type": "folder"
+      },
+      {
+        "children": [
+          {
+            "id": "/c/68c5e2bc-5ef8-832f-a138-0a96bc440eb5",
+            "type": "chat"
+          }
+        ],
+        "color": "#ffae00",
+        "expanded": false,
+        "id": "folder-6",
+        "name": "Crypto",
+        "type": "folder"
+      },
+      {
+        "children": [
+          {
+            "id": "/c/691f6686-edd0-8327-98e0-283ca45b430f",
+            "type": "chat"
+          }
+        ],
+        "color": "#007bff",
+        "expanded": false,
+        "id": "folder-7",
+        "name": "Climb Wales",
+        "type": "folder"
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "children": [],
+                "color": null,
+                "expanded": true,
+                "id": "folder-12",
+                "name": "Practical",
+                "type": "folder"
+              },
+              {
+                "children": [
+                  {
+                    "id": "/c/6930499f-2c2c-832a-bd40-657cc14f61b2",
+                    "type": "chat"
+                  },
+                  {
+                    "id": "/c/692e0255-e91c-832f-a994-a65d03963a04",
+                    "type": "chat"
+                  },
+                  {
+                    "id": "/c/692ec40e-5584-8330-9b0c-0f4252540e68",
+                    "type": "chat"
+                  },
+                  {
+                    "id": "/c/692ec720-fe98-832b-a74e-eda0b0196ecb",
+                    "type": "chat"
+                  },
+                  {
+                    "id": "/c/692ecb76-9ec8-8333-bc18-69a22f9e8902",
+                    "type": "chat"
+                  },
+                  {
+                    "id": "/c/692ed04b-b9f8-832e-b381-7030e6902aac",
+                    "type": "chat"
+                  },
+                  {
+                    "id": "/c/692ecff2-3148-8333-93ef-803e7361fc56",
+                    "type": "chat"
+                  }
+                ],
+                "color": "#00d5ff",
+                "expanded": false,
+                "id": "folder-10",
+                "name": "Psychometric Test",
+                "type": "folder"
+              },
+              {
+                "id": "/c/6921fc76-9d90-8330-9dd0-b955af51dc2f",
+                "type": "chat"
+              },
+              {
+                "id": "/c/6913671f-fa68-832c-862d-6bfe30a4ab10",
+                "type": "chat"
+              },
+              {
+                "id": "/c/692474e9-a07c-8327-a30e-00fca26222f5",
+                "type": "chat"
+              },
+              {
+                "id": "/c/692c7723-ecb4-832e-aa57-e027014d5998",
+                "type": "chat"
+              }
+            ],
+            "color": "#ff8800",
+            "expanded": true,
+            "id": "folder-9",
+            "name": "Canonical",
+            "type": "folder"
+          }
+        ],
+        "color": "#e1ff00",
+        "expanded": false,
+        "id": "folder-8",
+        "name": "Job Applications",
+        "type": "folder"
+      },
+      {
+        "children": [
+          {
+            "id": "/c/69300586-8824-832a-8b6a-f0ae36abbed2",
+            "type": "chat"
+          },
+          {
+            "id": "/c/69306bf4-1a14-832d-b652-599e2d32e0bd",
+            "type": "chat"
+          },
+          {
+            "id": "/c/692ecc64-51a8-8329-9e52-c37db068c87e",
+            "type": "chat"
+          },
+          {
+            "id": "/c/6919da23-1608-8328-9144-fb731e08fd91",
+            "type": "chat"
+          }
+        ],
+        "color": "#ff0000",
+        "expanded": true,
+        "id": "folder-11",
+        "name": "Plugins",
+        "type": "folder"
+      },
+      {
+        "id": "/c/692d7113-3e78-8326-ad2c-37214c90f44e",
+        "type": "chat"
+      },
+      {
+        "id": "/c/692de0f8-d55c-8326-a807-d7952f50fcff",
+        "type": "chat"
+      }
+    ],
+    "sidebarWidth": 456.9886169433594
+  }
+}

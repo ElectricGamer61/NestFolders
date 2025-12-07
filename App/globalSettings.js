@@ -7,7 +7,6 @@
             this.storage = storageService;
             this.key = "globalSettings";
             this.values = {
-                forceFoldersTop: false,
                 folderIconStyle: "outline",
                 showSidebarHandle: true
             };
@@ -27,15 +26,6 @@
             return this.storage.save({ [this.key]: this.values });
         }
 
-        setForceFoldersTop(value) {
-            this.values.forceFoldersTop = !!value;
-            return this.save();
-        }
-
-        getForceFoldersTop() {
-            return !!this.values.forceFoldersTop;
-        }
-
         setFolderIconStyle(style) {
             this.values.folderIconStyle = this._normalizeIconStyle(style);
             return this.save();
@@ -48,9 +38,6 @@
         async setValues(partial) {
             if (!partial || typeof partial !== "object") {
                 return this.save();
-            }
-            if (Object.prototype.hasOwnProperty.call(partial, "forceFoldersTop")) {
-                this.values.forceFoldersTop = !!partial.forceFoldersTop;
             }
             if (Object.prototype.hasOwnProperty.call(partial, "folderIconStyle")) {
                 this.values.folderIconStyle = this._normalizeIconStyle(partial.folderIconStyle);

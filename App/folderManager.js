@@ -88,6 +88,7 @@
 
       const wrapper = document.createElement("div");
       wrapper.className = "glyn-folder-wrapper";
+      wrapper.dataset.glynFolderId = id;
       wrapper.style.padding = "4px 0";
 
       wrapper.innerHTML = `
@@ -211,6 +212,69 @@
 
     getRecordById(id) {
       return this.folders.find(r => r.id === id) || null;
+    }
+
+    ensureFolderMounts() {
+      if (!this.historyDiv || !this.folders.length) return;
+      let reattached = 0;
+      const ensureMount = (record) => {
+        if (!record || !record.wrapperEl || !record.folderItem) return;
+        const parent = record.folderItem.getParentFolder
+          ? record.folderItem.getParentFolder()
+          : null;
+        const container = parent && parent.contentsEl
+          ? parent.contentsEl
+          : this.historyDiv;
+        if (!container) return;
+        if (record.wrapperEl.parentNode !== container) {
+          container.appendChild(record.wrapperEl);
+          reattached += 1;
+        }
+      };
+      this.folders.forEach(ensureMount);
+      this.removeDuplicateWrappers();
+      console.debug("[GlynGPT][Folders] ensureFolderMounts()", {
+        total: this.folders.length,
+        reattached
+      });
+    }
+
+    pinFoldersAtTop() {
+      if (!this.historyDiv || !this.folders.length) return;
+      const rootWrappers = this.folders
+        .filter(rec => rec && rec.folderItem && !rec.folderItem.getParentFolder())
+        .map(rec => rec.wrapperEl)
+        .filter(el => el && el.parentNode === this.historyDiv);
+      if (!rootWrappers.length) return;
+      this.removeDuplicateWrappers();
+      const fragment = document.createDocumentFragment();
+      rootWrappers.forEach(wrapper => fragment.appendChild(wrapper));
+      const firstNonFolder = Array.from(this.historyDiv.children).find(node =>
+        node && !(node.classList && node.classList.contains("glyn-folder-wrapper"))
+      ) || null;
+      if (firstNonFolder) {
+        this.historyDiv.insertBefore(fragment, firstNonFolder);
+      } else {
+        this.historyDiv.appendChild(fragment);
+      }
+    }
+
+    removeDuplicateWrappers() {
+      if (!this.historyDiv) return;
+      const allWrappers = Array.from(this.historyDiv.querySelectorAll(".glyn-folder-wrapper"));
+      allWrappers.forEach((node) => {
+        const id = node.dataset.glynFolderId ||
+          (node.querySelector(".glyn-folder-row") && node.querySelector(".glyn-folder-row").dataset.glynFolderId);
+        if (!id) return;
+        const record = this.getRecordById(id);
+        if (!record) {
+          node.remove();
+          return;
+        }
+        if (record.wrapperEl !== node) {
+          node.remove();
+        }
+      });
     }
 
     getRecordByContentsEl(el) {

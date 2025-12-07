@@ -3,16 +3,11 @@
   const ns = (window.GlynGPT = window.GlynGPT || {});
 
   class DragController {
-    constructor(historyDiv, historyManager, folderManager, forceFoldersTop) {
+    constructor(historyDiv, historyManager, folderManager) {
       this.historyDiv = historyDiv;
       this.historyManager = historyManager;
       this.folderManager = folderManager;
-      this.forceFoldersTop = !!forceFoldersTop;
       this.debugPrefix = "[GlynGPT][DragController]";
-    }
-
-    setForceFoldersTop(flag) {
-      this.forceFoldersTop = !!flag;
     }
 
     // Find the folder record whose contentsEl currently contains the given chat element

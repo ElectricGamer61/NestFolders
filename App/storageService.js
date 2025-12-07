@@ -62,6 +62,53 @@
             return this._saveQueue;
         }
 
+        loadKeys(keys) {
+            return new Promise((resolve) => {
+                if (!this._storage) {
+                    resolve({});
+                    return;
+                }
+                this._storage.get(keys, (result) => resolve(result || {}));
+            });
+        }
+
+        saveKeys(setObj, removeKeys) {
+            if (!this._storage) {
+                return Promise.resolve(false);
+            }
+            this._saveQueue = this._saveQueue.then(() => new Promise((resolve) => {
+                const doRemove = () => {
+                    if (removeKeys && removeKeys.length) {
+                        this._storage.remove(removeKeys, () => resolve(true));
+                    } else {
+                        resolve(true);
+                    }
+                };
+                if (setObj && Object.keys(setObj).length) {
+                    this._storage.set(setObj, doRemove);
+                } else {
+                    doRemove();
+                }
+            }));
+            return this._saveQueue;
+        }
+
+        dumpAll() {
+            return this.loadKeys(null);
+        }
+
+        overwriteAll(map) {
+            if (!this._storage) {
+                return Promise.resolve(false);
+            }
+            return this.dumpAll().then((existing) => {
+                const currentKeys = Object.keys(existing || {});
+                const incomingKeys = map ? Object.keys(map) : [];
+                const toRemove = currentKeys.filter((key) => !incomingKeys.includes(key));
+                return this.saveKeys(map || {}, toRemove);
+            });
+        }
+
         _applyPatch(patch) {
             return new Promise((resolve) => {
                 this._storage.get({ [this.storageKey]: {} }, (result) => {

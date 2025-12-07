@@ -4,7 +4,6 @@
     const StorageService = ns.StorageService;
     const GlobalSettings = ns.GlobalSettings;
 
-    const foldersTopEl = document.getElementById("setting-folders-top");
     const sidebarHandleEl = document.getElementById("setting-sidebar-handle");
     const iconStyleEls = Array.from(document.querySelectorAll("input[name='icon-style']"));
     const createFolderBtn = document.getElementById("create-folder-btn");
@@ -29,7 +28,6 @@
     init();
 
     function disableControls(disabled) {
-        if (foldersTopEl) foldersTopEl.disabled = disabled;
         if (sidebarHandleEl) sidebarHandleEl.disabled = disabled;
         iconStyleEls.forEach(el => { el.disabled = disabled; });
         if (createFolderBtn) createFolderBtn.disabled = disabled;
@@ -57,9 +55,6 @@
 
     function applyUI(values) {
         if (!values) return;
-        if (foldersTopEl) {
-            foldersTopEl.checked = !!values.forceFoldersTop;
-        }
         if (sidebarHandleEl) {
             sidebarHandleEl.checked = values.showSidebarHandle !== false;
         }
@@ -70,12 +65,6 @@
     }
 
     function attachHandlers() {
-        if (foldersTopEl) {
-            foldersTopEl.addEventListener("change", () => {
-                if (loading) return;
-                handleSettingChange({ forceFoldersTop: foldersTopEl.checked });
-            });
-        }
         if (sidebarHandleEl) {
             sidebarHandleEl.addEventListener("change", () => {
                 if (loading) return;
@@ -213,7 +202,7 @@
     async function exportDataSnapshot() {
         try {
             statusEl.textContent = "Preparing download...";
-            const data = await storage.load({});
+            const data = await storage.dumpAll();
             const serialized = JSON.stringify(data || {}, null, 2);
             const blob = new Blob([serialized], { type: "application/json" });
             const url = URL.createObjectURL(blob);
@@ -242,7 +231,7 @@
                 if (!parsed || typeof parsed !== "object") {
                     throw new Error("invalid-json");
                 }
-                await storage.save(parsed);
+                await storage.overwriteAll(parsed);
                 statusEl.textContent = "Import complete. Reload chatgpt.com to apply.";
             } catch (err) {
                 console.warn("[GlynGPT] Failed to import data", err);

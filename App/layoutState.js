@@ -1,177 +1,127 @@
-(function () {
-    // @meta LayoutState serializes folders/chats to storage and restores them on load.
+ (function () {
+    // @meta LayoutState stores folders/chats using compact records split across storage keys.
     const ns = (window.GlynGPT = window.GlynGPT || {});
+
+    const LAYOUT_VERSION = 1;
+    const INDEX_KEY = "layoutIndex";
+    const FOLDER_PREFIX = "f";
 
     class LayoutState {
         constructor(storageService, folderManager, historyManager) {
             this.storage = storageService;
             this.folderManager = folderManager;
             this.historyManager = historyManager;
-            this.storageKey = "layout";
-            this.data = this._defaultState();
             this.isRestoring = false;
             this._saveTimer = null;
             this.sidebarWidth = null;
+            this._knownFolderIds = new Set();
+            this.pendingAssignments = new Map();
         }
 
         _defaultState() {
             return { items: [], sidebarWidth: null };
         }
 
-        _sanitizeState(raw) {
-            if (!raw || typeof raw !== "object") {
-                return this._defaultState();
-            }
-
-            const items = Array.isArray(raw.items)
-                ? raw.items.map(entry => this._sanitizeItem(entry)).filter(Boolean)
-                : null;
-
-            if (!items) {
-                return this._convertLegacyState(raw);
-            }
-
-            return {
-                items,
-                sidebarWidth: this._normalizeSidebarWidth(raw.sidebarWidth)
-            };
-        }
-
-        _convertLegacyState(raw) {
-            const folders = new Map();
-            if (Array.isArray(raw.folders)) {
-                raw.folders.forEach((folder) => {
-                    if (!folder || typeof folder !== "object") return;
-                    const id = typeof folder.id === "string" ? folder.id : null;
-                    if (!id) return;
-                    folders.set(id, {
-                        type: "folder",
-                        id,
-                        name: typeof folder.name === "string" ? folder.name : "Folder",
-                        color: typeof folder.color === "string" ? folder.color : null,
-                        expanded: folder.expanded !== false,
-                        children: Array.isArray(folder.children)
-                            ? folder.children
-                                .filter(href => typeof href === "string" && href.length)
-                                .map(href => ({ type: "chat", id: href }))
-                            : []
-                    });
-                });
-            }
-
-            let topLevel = [];
-            if (Array.isArray(raw.topLevelItems)) {
-                topLevel = raw.topLevelItems
-                    .map(item => this._normalizeLegacyItem(item))
-                    .filter(Boolean);
-            } else if (Array.isArray(raw.rootOrder)) {
-                topLevel = raw.rootOrder
-                    .filter(href => typeof href === "string" && href.length)
-                    .map(href => ({ type: "chat", id: href }));
-            }
-
-            const items = [];
-            topLevel.forEach((entry) => {
-                if (entry.type === "chat") {
-                    items.push(entry);
-                    return;
-                }
-                if (entry.type === "folder") {
-                    const folder = folders.get(entry.id);
-                    if (folder) {
-                        items.push(folder);
-                    }
-                }
-            });
-
-            return { items, sidebarWidth: null };
-        }
-
-        _sanitizeItem(entry) {
-            if (!entry) return null;
-            if (typeof entry === "string") {
-                return { type: "chat", id: entry };
-            }
-            if (typeof entry !== "object") return null;
-            const id = typeof entry.id === "string" ? entry.id : null;
-            if (!id) return null;
-            if (entry.type === "chat") {
-                return { type: "chat", id };
-            }
-            if (entry.type !== "folder") return null;
-            return {
-                type: "folder",
-                id,
-                name: typeof entry.name === "string" ? entry.name : "Folder",
-                color: typeof entry.color === "string" ? entry.color : null,
-                expanded: entry.expanded !== false,
-                children: Array.isArray(entry.children)
-                    ? entry.children.map(child => this._sanitizeItem(child)).filter(Boolean)
-                    : []
-            };
-        }
-
-        _normalizeLegacyItem(item) {
-            if (!item) return null;
-            if (typeof item === "string") {
-                return { type: "chat", id: item };
-            }
-            if (typeof item !== "object") return null;
-            const id = typeof item.id === "string" ? item.id : null;
-            if (!id) return null;
-            if (item.type === "folder") {
-                return { type: "folder", id };
-            }
-            if (item.type === "chat") {
-                return { type: "chat", id };
-            }
-            return null;
-        }
-
         async restore() {
-            if (!this.storage) {
+            if (!this.storage || !this.folderManager || !this.folderManager.historyDiv) {
+                return false;
+            }
+
+            this._clearPendingPlaceholders();
+
+            const indexData = await this.storage.loadKeys([INDEX_KEY]);
+            const rawIndex = indexData && indexData[INDEX_KEY];
+            if (!rawIndex) {
+                this._knownFolderIds.clear();
                 this.data = this._defaultState();
                 return false;
             }
-            const stored = await this.storage.load({});
-            const state = stored && stored[this.storageKey]
-                ? this._sanitizeState(stored[this.storageKey])
-                : this._defaultState();
 
-            this.data = state;
-            this.sidebarWidth = this._normalizeSidebarWidth(state.sidebarWidth);
-            const hasData = Array.isArray(state.items) && state.items.length > 0;
-            if (hasData) {
-                await this.applyState(state);
-            }
-            return hasData;
-        }
-
-        async applyState(state) {
-            if (!this.folderManager || !this.historyManager || !this.folderManager.historyDiv) {
+            let indexPayload;
+            try {
+                indexPayload = typeof rawIndex === "string" ? JSON.parse(rawIndex) : rawIndex;
+            } catch (_err) {
+                console.warn("[GlynGPT] Invalid layout index");
                 return false;
             }
+
+            const folderIds = Array.isArray(indexPayload.fi) ? indexPayload.fi : [];
+            const folderKeys = folderIds.map((id) => FOLDER_PREFIX + id);
+            const folderPayloadMap = new Map();
+            if (folderKeys.length) {
+                const folderData = await this.storage.loadKeys(folderKeys);
+                folderKeys.forEach((key, idx) => {
+                    const raw = folderData && folderData[key];
+                    if (!raw) return;
+                    try {
+                        folderPayloadMap.set(folderIds[idx], typeof raw === "string" ? JSON.parse(raw) : raw);
+                    } catch (_err) {
+                        console.warn("[GlynGPT] Invalid folder payload:", key);
+                    }
+                });
+            }
+
+            this.sidebarWidth = this._normalizeSidebarWidth(indexPayload.sb);
 
             this.isRestoring = true;
             this.folderManager.suspendNotifications();
             this.historyManager.suspendNotifications();
-
             this.folderManager.clearAllFolders();
 
+            const rawEntries = Array.isArray(indexPayload.tl) ? indexPayload.tl : [];
+            const entries = rawEntries.filter((entry) => entry && entry.t === "f");
+            if (folderPayloadMap && folderPayloadMap.size) {
+                const missing = new Set(Array.from(folderPayloadMap.keys()));
+                entries.forEach((entry) => missing.delete(entry.i));
+                missing.forEach((id) => entries.push({ t: "f", i: id }));
+            }
+
+            console.info("[GlynGPT][Layout] Restoring folders", JSON.stringify({
+                requested: entries.length,
+                storedFolders: folderPayloadMap.size
+            }));
+
             const chatMap = this._collectChatMap();
-            this._applyItemsToContainer(
-                Array.isArray(state.items) ? state.items : [],
+            this._applyEntries(
+                entries,
                 this.folderManager.historyDiv,
-                chatMap,
-                null
+                null,
+                folderPayloadMap,
+                chatMap
             );
+            console.info("[GlynGPT][Layout] After apply entries, folder count:", this.folderManager.folders.length);
+            if (!this.folderManager.folders.length && folderPayloadMap && folderPayloadMap.size) {
+                const fallback = Array.from(folderPayloadMap.keys())
+                    .sort((a, b) => a - b)
+                    .map((id) => ({ t: "f", i: id }));
+                console.warn("[GlynGPT][Layout] No folders mounted after first pass. Applying fallback list.");
+                this._applyEntries(
+                    fallback,
+                    this.folderManager.historyDiv,
+                    null,
+                    folderPayloadMap,
+                    chatMap
+                );
+                console.warn("[GlynGPT][Layout] Fallback applied. Folder count:", this.folderManager.folders.length);
+            }
 
             const rootLinks = this.folderManager.getRootChatLinks();
             this.historyManager.resetFromLinks(rootLinks);
-
+            if (typeof this.folderManager.removeDuplicateWrappers === "function") {
+                this.folderManager.removeDuplicateWrappers();
+            }
+            if (typeof this.folderManager.ensureFolderMounts === "function") {
+                this.folderManager.ensureFolderMounts();
+            }
+            if (typeof this.folderManager.pinFoldersAtTop === "function") {
+                this.folderManager.pinFoldersAtTop();
+            }
             this.historyManager.resumeNotifications();
             this.folderManager.resumeNotifications();
             this.isRestoring = false;
+
+            this._knownFolderIds = new Set(folderIds);
+            this.data = this._defaultState();
             return true;
         }
 
@@ -190,14 +140,19 @@
             return map;
         }
 
-        _applyItemsToContainer(items, containerEl, chatMap, parentFolder) {
-            if (!Array.isArray(items) || !containerEl) return;
+        _applyEntries(entries, containerEl, parentFolder, folderPayloadMap, chatMap) {
+            if (!Array.isArray(entries) || !containerEl) return;
 
-            items.forEach((entry) => {
-                if (!entry) return;
-                if (entry.type === "chat") {
-                    const link = chatMap.get(entry.id);
-                    if (!link) return;
+            entries.forEach((entry) => {
+                if (!entry || typeof entry !== "object") return;
+                if (entry.t === "c") {
+                    const href = this._expandChatId(entry.i);
+                    if (!href) return;
+                    const link = chatMap.get(href);
+                    if (!link) {
+                        this._registerPendingChat(entry.i, containerEl, parentFolder);
+                        return;
+                    }
                     containerEl.appendChild(link);
                     if (parentFolder && link.__glynChatItem) {
                         parentFolder.addChild(link.__glynChatItem);
@@ -205,74 +160,211 @@
                     return;
                 }
 
-                if (entry.type === "folder") {
-                    const folder = this.folderManager.createFolder(entry.name || "Folder", {
-                        id: entry.id,
-                        color: entry.color,
-                        expanded: entry.expanded,
+                if (entry.t === "f") {
+                    const folderPayload = folderPayloadMap.get(entry.i);
+                    if (!folderPayload) return;
+                    const folderId = this._folderIdFromNumber(entry.i);
+                    console.debug("[GlynGPT][Layout] Creating folder", folderPayload.n || "Folder", {
+                        id: folderId,
+                        parent: parentFolder ? parentFolder.id : null
+                    });
+                    const folder = this.folderManager.createFolder(folderPayload.n || "Folder", {
+                        id: folderId,
+                        color: folderPayload["#"] ? `#${folderPayload["#"]}` : null,
+                        expanded: true,
                         data: {
-                            name: entry.name || "Folder",
-                            color: entry.color
+                            name: folderPayload.n || "Folder",
+                            color: folderPayload["#"] ? `#${folderPayload["#"]}` : null
                         },
                         parentFolder,
                         insertAtTop: false
                     });
                     if (!folder) return;
-                    folder.data.expanded = entry.expanded !== false;
-                    folder.isExpanded = folder.data.expanded;
-                    if (folder.contentsEl) {
-                        folder.contentsEl.style.display = folder.isExpanded ? "" : "none";
+                    if (typeof folder.setExpanded === "function") {
+                        folder.setExpanded(true);
+                    } else {
+                        folder.data.expanded = true;
+                        folder.isExpanded = true;
+                        if (folder.contentsEl) {
+                            folder.contentsEl.style.display = "";
+                        }
+                        folder.refreshChevron();
                     }
-                    folder.refreshChevron();
-                    this._applyItemsToContainer(entry.children || [], folder.contentsEl, chatMap, folder);
+                    const children = Array.isArray(folderPayload.ch) ? folderPayload.ch : [];
+                    this._applyEntries(children, folder.contentsEl, folder, folderPayloadMap, chatMap);
                 }
             });
+        }
+
+        _registerPendingChat(chatId, containerEl, parentFolder) {
+            if (!containerEl) {
+                containerEl = this.folderManager ? this.folderManager.historyDiv : null;
+            }
+            if (!containerEl) return;
+            const expanded = this._expandChatId(chatId);
+            const compactId = this._compactChatId(expanded);
+            if (!compactId || this.pendingAssignments.has(compactId)) return;
+
+            const placeholder = document.createElement("div");
+            placeholder.className = "glyn-chat-placeholder";
+            placeholder.dataset.chatId = compactId;
+            placeholder.textContent = "Loading conversation...";
+
+            containerEl.appendChild(placeholder);
+
+            this.pendingAssignments.set(compactId, {
+                container: containerEl,
+                parentFolder,
+                placeholder
+            });
+            console.debug("[GlynGPT][Layout] Registered pending chat", compactId, {
+                parentFolder: parentFolder ? parentFolder.id : null
+            });
+        }
+
+        _clearPendingPlaceholders() {
+            if (!this.pendingAssignments || !this.pendingAssignments.size) return;
+            this.pendingAssignments.forEach(({ placeholder }) => {
+                if (placeholder && placeholder.parentNode) {
+                    placeholder.parentNode.removeChild(placeholder);
+                }
+            });
+            this.pendingAssignments.clear();
+            console.debug("[GlynGPT][Layout] Cleared pending placeholders");
+        }
+
+        tryHydrateChat(chatItem) {
+            if (!chatItem) return false;
+            const compactId = this._compactChatId(chatItem.id || chatItem.href);
+            if (!compactId) return false;
+            const pending = this.pendingAssignments.get(compactId);
+            if (!pending) return false;
+            const container = pending.container ||
+                (pending.parentFolder && pending.parentFolder.contentsEl) ||
+                (this.folderManager ? this.folderManager.historyDiv : null);
+            if (!container) return false;
+
+            const placeholder = pending.placeholder;
+            if (placeholder && placeholder.parentNode === container) {
+                container.insertBefore(chatItem.el, placeholder);
+                placeholder.parentNode.removeChild(placeholder);
+            } else {
+                container.appendChild(chatItem.el);
+            }
+
+            if (pending.parentFolder) {
+                pending.parentFolder.addChild(chatItem);
+                if (typeof pending.parentFolder.syncChildrenFromDOM === "function") {
+                    pending.parentFolder.syncChildrenFromDOM();
+                }
+            }
+
+            this.pendingAssignments.delete(compactId);
+            console.info("[GlynGPT][Layout] Hydrated delayed chat", compactId);
+            return true;
         }
 
         async save() {
             if (!this.storage) return false;
-            const serialized = this.serialize();
-            this.data = serialized;
-            return this.storage.save({ [this.storageKey]: serialized });
+            const snapshot = this._buildSnapshot();
+            const setObj = {};
+            setObj[INDEX_KEY] = JSON.stringify(snapshot.index);
+            snapshot.folders.forEach((payload, id) => {
+                setObj[FOLDER_PREFIX + id] = JSON.stringify(payload);
+            });
+
+            const keptIds = new Set(snapshot.folderIds);
+            const removedIds = [];
+            this._knownFolderIds.forEach((id) => {
+                if (!keptIds.has(id)) {
+                    removedIds.push(FOLDER_PREFIX + id);
+                }
+            });
+
+            await this.storage.saveKeys(setObj, removedIds);
+            this._knownFolderIds = keptIds;
+            this.data = this._defaultState();
+            return true;
         }
 
-        serialize() {
+        _buildSnapshot() {
+            const folderMap = new Map();
+            const folderIds = new Set();
+            const topLevel = this._serializeContainer(
+                this.folderManager ? this.folderManager.historyDiv : null,
+                folderMap,
+                folderIds,
+                {
+                    includeChats: false,
+                    preventDuplicates: true,
+                    seenFolders: new Set()
+                }
+            );
+            const index = {
+                v: LAYOUT_VERSION,
+                tl: topLevel
+            };
+            if (this.sidebarWidth) {
+                index.sb = Math.round(this.sidebarWidth);
+            }
+            if (folderIds.size) {
+                index.fi = Array.from(folderIds);
+            }
             return {
-                items: this._serializeContainer(
-                    this.folderManager ? this.folderManager.historyDiv : null
-                ),
-                sidebarWidth: this.sidebarWidth || null
+                index,
+                folders: folderMap,
+                folderIds: Array.from(folderIds)
             };
         }
 
-        _serializeContainer(containerEl) {
+        _serializeContainer(containerEl, folderMap, folderIds, options) {
             if (!containerEl) return [];
-            const items = [];
+            const includeChats = options && options.includeChats;
+            const preventDuplicates = options && options.preventDuplicates;
+            const seenFolders = options && options.seenFolders;
+            const entries = [];
             Array.from(containerEl.children).forEach((node) => {
                 if (node.classList && node.classList.contains("glyn-folder-wrapper")) {
                     const folder = node.__glynFolderItem;
                     if (!folder) return;
-                    items.push({
-                        type: "folder",
-                        id: folder.id,
-                        name: folder.data && folder.data.name ? folder.data.name : "Folder",
-                        color: folder.data && folder.data.color ? folder.data.color : null,
-                        expanded: folder.data && typeof folder.data.expanded === "boolean"
-                            ? folder.data.expanded
-                            : folder.isExpanded,
-                        children: this._serializeContainer(folder.contentsEl)
-                    });
+                    const idNum = this._folderNumberFromId(folder.id);
+                    if (preventDuplicates && seenFolders) {
+                        if (seenFolders.has(idNum)) {
+                            return;
+                        }
+                        seenFolders.add(idNum);
+                    }
+                    folderIds.add(idNum);
+                    const payload = {
+                        n: folder.data && folder.data.name ? folder.data.name : "Folder"
+                    };
+                    if (folder.data && folder.data.color) {
+                        payload["#"] = folder.data.color.replace(/^#/, "");
+                    }
+                    const childEntries = this._serializeContainer(
+                        folder.contentsEl,
+                        folderMap,
+                        folderIds,
+                        { includeChats: true }
+                    );
+                    if (childEntries.length) {
+                        payload.ch = childEntries;
+                    }
+                    folderMap.set(idNum, payload);
+                    entries.push({ t: "f", i: idNum });
                     return;
                 }
-
-                if (node.matches && node.matches("a.__menu-item")) {
+                if (includeChats && node.matches && node.matches("a.__menu-item")) {
                     const href = node.getAttribute("href") || "";
                     if (href) {
-                        items.push({ type: "chat", id: href });
+                        const chatId = this._compactChatId(href);
+                        if (chatId) {
+                            entries.push({ t: "c", i: chatId });
+                        }
                     }
                 }
             });
-            return items;
+            return entries;
         }
 
         hasFolders() {
@@ -316,6 +408,29 @@
             this._saveTimer = setTimeout(() => {
                 this.save().catch(err => console.warn("[GlynGPT] Failed to save layout", err));
             }, 250);
+        }
+
+        _compactChatId(href) {
+            if (!href) return null;
+            return href.replace(/^\/c\//, "");
+        }
+
+        _expandChatId(id) {
+            if (!id) return null;
+            return id.startsWith("/c/") ? id : `/c/${id}`;
+        }
+
+        _folderNumberFromId(id) {
+            if (typeof id === "number") return id;
+            const match = /(\d+)$/.exec(id || "");
+            return match ? parseInt(match[1], 10) : id;
+        }
+
+        _folderIdFromNumber(value) {
+            if (typeof value === "number") {
+                return `folder-${value}`;
+            }
+            return value;
         }
     }
 
