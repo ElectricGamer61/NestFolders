@@ -8,6 +8,11 @@
             this.id = id;       // href for chats, folderId for folders
             this.type = type;   // "chat" or "folder"
             this.enabled = false;
+            this.wrapperEl = domElement ? domElement.closest(".glyn-folder-wrapper") : null;
+            this.hoverBandEls = this.wrapperEl
+                ? Array.from(this.wrapperEl.querySelectorAll(".glyn-folder-hover-band"))
+                : [];
+            this.hoverBandHandlers = [];
         }
 
         enableDrag() {
@@ -23,10 +28,44 @@
             this.el.addEventListener("drop", this.onDrop.bind(this));
             this.el.addEventListener("dragend", this.onDragEnd.bind(this));
             this.el.addEventListener("dragleave", this.onDragLeave.bind(this));
+
+            if (this.type === "folder" && this.hoverBandEls.length) {
+                this.hoverBandEls.forEach((band) => {
+                    const onOver = (evt) => {
+                        if (!this.enabled || !DraggableElement.currentDrag) return;
+                        evt.preventDefault();
+                        evt.stopPropagation();
+                        if (DraggableElement.hideDropMarker) {
+                            DraggableElement.hideDropMarker();
+                        }
+                        if (DraggableElement.highlightDropTarget) {
+                            DraggableElement.highlightDropTarget(this.el);
+                        }
+                    };
+                    const onLeave = (_evt) => {
+                        if (DraggableElement.unhighlightDropTarget) {
+                            DraggableElement.unhighlightDropTarget(this.el);
+                        }
+                    };
+                    const onDrop = (evt) => {
+                        if (!this.enabled || !DraggableElement.currentDrag) return;
+                        evt.preventDefault();
+                        evt.stopPropagation();
+                        this.onDrop(evt);
+                    };
+                    band.addEventListener("dragover", onOver);
+                    band.addEventListener("dragleave", onLeave);
+                    band.addEventListener("drop", onDrop);
+                    this.hoverBandHandlers.push({ band, onOver, onLeave, onDrop });
+                });
+            }
         }
 
         onDragStart(evt) {
             DraggableElement.currentDrag = this;
+            if (document && document.documentElement) {
+                document.documentElement.classList.add("glyn-drag-active");
+            }
             if (evt.dataTransfer) {
                 evt.dataTransfer.effectAllowed = "move";
                 // Needed for cross-browser behaviour
@@ -129,6 +168,15 @@
             }
             if (this.type === "folder" && DraggableElement.unhighlightDropTarget) {
                 DraggableElement.unhighlightDropTarget(this.el);
+            }
+            this.hoverBandHandlers.forEach(({ band, onOver, onLeave, onDrop }) => {
+                band.removeEventListener("dragover", onOver);
+                band.removeEventListener("dragleave", onLeave);
+                band.removeEventListener("drop", onDrop);
+            });
+            this.hoverBandHandlers = [];
+            if (document && document.documentElement) {
+                document.documentElement.classList.remove("glyn-drag-active");
             }
             DraggableElement.currentDrag = null;
         }

@@ -89,7 +89,8 @@
       const wrapper = document.createElement("div");
       wrapper.className = "glyn-folder-wrapper";
       wrapper.dataset.glynFolderId = id;
-      wrapper.style.padding = "4px 0";
+      wrapper.style.padding = "0";
+      wrapper.style.position = "relative";
 
       wrapper.innerHTML = `
         <div class="glyn-folder-row" data-glyn-folder-id="${id}"
@@ -113,6 +114,7 @@
             </button>
           </div>
         </div>
+        <div class="glyn-folder-hover-band" data-glyn-folder-hover="${id}"></div>
         <div data-glyn-folder-contents="${id}" style="margin-left: 24px;"></div>
       `;
 
@@ -133,6 +135,7 @@
 
       const rowEl = wrapper.querySelector(".glyn-folder-row");
       const contentsEl = wrapper.querySelector(`[data-glyn-folder-contents="${id}"]`);
+      const hoverBandEl = wrapper.querySelector(`[data-glyn-folder-hover="${id}"]`);
       const mainEl = wrapper.querySelector(".glyn-folder-main");
       const labelEl = wrapper.querySelector("[data-glyn-folder-label]");
       const chevronEl = wrapper.querySelector("[data-glyn-folder-chevron]");
@@ -169,6 +172,19 @@
       folder.setParentFolder(parentFolder);
 
       folder.enableDrag();
+      if (hoverBandEl && rowEl) {
+        const updateBandSize = () => {
+          const bandHeight = 36;
+          hoverBandEl.style.height = `${bandHeight}px`;
+          hoverBandEl.style.top = "";
+        };
+        updateBandSize();
+        if (typeof ResizeObserver !== "undefined") {
+          const ro = new ResizeObserver(updateBandSize);
+          ro.observe(rowEl);
+          hoverBandEl.__glynResizeObserver = ro;
+        }
+      }
       folder.isExpanded = typeof opts.expanded === "boolean" ? opts.expanded : true;
       folder.data.expanded = folder.isExpanded;
       if (folder.contentsEl) {
