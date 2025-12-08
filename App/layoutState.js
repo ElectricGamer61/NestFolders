@@ -2,9 +2,12 @@
     // @meta LayoutState stores folders/chats using compact records split across storage keys.
     const ns = (window.GlynGPT = window.GlynGPT || {});
 
-    const LAYOUT_VERSION = 1;
-    const INDEX_KEY = "layoutIndex";
+    const LAYOUT_VERSION = 2;
+    const ROOT_FOLDER_ID = 0;
     const FOLDER_PREFIX = "f";
+    const META_SUFFIX = "__meta";
+    const CHUNK_SUFFIX = "__chunk_";
+    const CHUNK_SIZE = 7000;
 
     class LayoutState {
         constructor(storageService, folderManager, historyManager) {
@@ -13,13 +16,14 @@
             this.historyManager = historyManager;
             this.isRestoring = false;
             this._saveTimer = null;
-            this.sidebarWidth = null;
             this._knownFolderIds = new Set();
             this.pendingAssignments = new Map();
+            this._folderChunkCounts = new Map();
+            this._rootChunkCount = 0;
         }
 
         _defaultState() {
-            return { items: [], sidebarWidth: null };
+            return { items: [] };
         }
 
         async restore() {
@@ -28,47 +32,33 @@
             }
 
             this._clearPendingPlaceholders();
+            this._folderChunkCounts.clear();
+            this._rootChunkCount = 0;
 
-            const indexData = await this.storage.loadKeys([INDEX_KEY]);
-            const rawIndex = indexData && indexData[INDEX_KEY];
-            if (!rawIndex) {
+            const rootPayload = await this._loadFolderPayload(ROOT_FOLDER_ID);
+            if (!rootPayload) {
                 this._knownFolderIds.clear();
                 this.data = this._defaultState();
                 return false;
             }
 
-            let indexPayload;
-            try {
-                indexPayload = typeof rawIndex === "string" ? JSON.parse(rawIndex) : rawIndex;
-            } catch (_err) {
-                console.warn("[GlynGPT] Invalid layout index");
-                return false;
-            }
-
-            const folderIds = Array.isArray(indexPayload.fi) ? indexPayload.fi : [];
-            const folderKeys = folderIds.map((id) => FOLDER_PREFIX + id);
+            const folderIds = Array.isArray(rootPayload.fi) ? rootPayload.fi : [];
             const folderPayloadMap = new Map();
-            if (folderKeys.length) {
-                const folderData = await this.storage.loadKeys(folderKeys);
-                folderKeys.forEach((key, idx) => {
-                    const raw = folderData && folderData[key];
-                    if (!raw) return;
-                    try {
-                        folderPayloadMap.set(folderIds[idx], typeof raw === "string" ? JSON.parse(raw) : raw);
-                    } catch (_err) {
-                        console.warn("[GlynGPT] Invalid folder payload:", key);
+            if (folderIds.length) {
+                for (const folderId of folderIds) {
+                    const payload = await this._loadFolderPayload(folderId);
+                    if (payload) {
+                        folderPayloadMap.set(folderId, payload);
                     }
-                });
+                }
             }
-
-            this.sidebarWidth = this._normalizeSidebarWidth(indexPayload.sb);
 
             this.isRestoring = true;
             this.folderManager.suspendNotifications();
             this.historyManager.suspendNotifications();
             this.folderManager.clearAllFolders();
 
-            const rawEntries = Array.isArray(indexPayload.tl) ? indexPayload.tl : [];
+            const rawEntries = Array.isArray(rootPayload.ch) ? rootPayload.ch : [];
             const entries = rawEntries.filter((entry) => entry && entry.t === "f");
             if (folderPayloadMap && folderPayloadMap.size) {
                 const missing = new Set(Array.from(folderPayloadMap.keys()));
@@ -268,20 +258,27 @@
             if (!this.storage) return false;
             const snapshot = this._buildSnapshot();
             const setObj = {};
-            setObj[INDEX_KEY] = JSON.stringify(snapshot.index);
+            const removals = [];
+
+            this._encodeFolderPayload(ROOT_FOLDER_ID, snapshot.root, setObj, removals);
             snapshot.folders.forEach((payload, id) => {
-                setObj[FOLDER_PREFIX + id] = JSON.stringify(payload);
+                this._encodeFolderPayload(id, payload, setObj, removals);
             });
 
             const keptIds = new Set(snapshot.folderIds);
-            const removedIds = [];
             this._knownFolderIds.forEach((id) => {
                 if (!keptIds.has(id)) {
-                    removedIds.push(FOLDER_PREFIX + id);
+                    const baseKey = this._folderKey(id);
+                    removals.push(baseKey, this._metaKeyFor(id));
+                    const prevCount = this._folderChunkCounts.get(id) || 0;
+                    for (let i = 0; i < prevCount; i += 1) {
+                        removals.push(this._chunkKeyFor(id, i));
+                    }
+                    this._folderChunkCounts.delete(id);
                 }
             });
 
-            await this.storage.saveKeys(setObj, removedIds);
+            await this.storage.saveKeys(setObj, removals);
             this._knownFolderIds = keptIds;
             this.data = this._defaultState();
             return true;
@@ -300,18 +297,16 @@
                     seenFolders: new Set()
                 }
             );
-            const index = {
-                v: LAYOUT_VERSION,
-                tl: topLevel
-            };
-            if (this.sidebarWidth) {
-                index.sb = Math.round(this.sidebarWidth);
+            const rootPayload = {};
+            if (topLevel.length) {
+                rootPayload.ch = topLevel;
             }
             if (folderIds.size) {
-                index.fi = Array.from(folderIds);
+                rootPayload.fi = Array.from(folderIds);
             }
+            rootPayload.v = LAYOUT_VERSION;
             return {
-                index,
+                root: rootPayload,
                 folders: folderMap,
                 folderIds: Array.from(folderIds)
             };
@@ -371,32 +366,6 @@
             return !!(this.folderManager && this.folderManager.folders.length);
         }
 
-        getSidebarWidth() {
-            return this.sidebarWidth || null;
-        }
-
-        setSidebarWidth(width) {
-            const normalized = this._normalizeSidebarWidth(width);
-            if (normalized === this.sidebarWidth) {
-                return;
-            }
-            this.sidebarWidth = normalized;
-            this.markDirty({ immediate: true });
-        }
-
-        _normalizeSidebarWidth(value) {
-            if (typeof value === "number" && Number.isFinite(value)) {
-                return value;
-            }
-            if (typeof value === "string") {
-                const parsed = parseFloat(value);
-                if (!Number.isNaN(parsed)) {
-                    return parsed;
-                }
-            }
-            return null;
-        }
-
         markDirty(options) {
             if (this.isRestoring) return;
             const immediate = options && options.immediate;
@@ -431,6 +400,104 @@
                 return `folder-${value}`;
             }
             return value;
+        }
+
+        _folderKey(id) {
+            return `${FOLDER_PREFIX}${id}`;
+        }
+
+        _metaKeyFor(id) {
+            return `${this._folderKey(id)}${META_SUFFIX}`;
+        }
+
+        _chunkKeyFor(id, index) {
+            return `${this._folderKey(id)}${CHUNK_SUFFIX}${index}`;
+        }
+
+        async _loadFolderPayload(id) {
+            if (!this.storage) return null;
+            const baseKey = this._folderKey(id);
+            const metaKey = this._metaKeyFor(id);
+            const data = await this.storage.loadKeys([baseKey, metaKey]);
+            let payload = data && data[baseKey];
+            let chunkCount = 0;
+            if (!payload) {
+                const meta = data && data[metaKey];
+                if (!meta || !meta.chunkCount || meta.chunkCount <= 0) {
+                    return null;
+                }
+                chunkCount = meta.chunkCount;
+                const chunkKeys = [];
+                for (let i = 0; i < chunkCount; i += 1) {
+                    chunkKeys.push(this._chunkKeyFor(id, i));
+                }
+                const chunkData = await this.storage.loadKeys(chunkKeys);
+                const serialized = chunkKeys.map((key) => chunkData[key] || "").join("");
+                if (!serialized) return null;
+                try {
+                    payload = JSON.parse(serialized);
+                } catch (_err) {
+                    console.warn("[GlynGPT] Invalid chunked payload:", baseKey);
+                    return null;
+                }
+            } else if (typeof payload === "string") {
+                try {
+                    payload = JSON.parse(payload);
+                } catch (_err) {
+                    console.warn("[GlynGPT] Invalid payload:", baseKey);
+                    return null;
+                }
+            }
+            if (id === ROOT_FOLDER_ID) {
+                this._rootChunkCount = chunkCount;
+            } else {
+                this._folderChunkCounts.set(id, chunkCount);
+            }
+            return payload;
+        }
+
+        _encodeFolderPayload(id, payload, setObj, removals) {
+            if (!payload) return;
+            const baseKey = this._folderKey(id);
+            const metaKey = this._metaKeyFor(id);
+            const chunkPrefix = `${baseKey}${CHUNK_SUFFIX}`;
+            const prevCount = id === ROOT_FOLDER_ID
+                ? this._rootChunkCount
+                : (this._folderChunkCounts.get(id) || 0);
+            const serialized = JSON.stringify(payload);
+            if (serialized.length <= CHUNK_SIZE) {
+                setObj[baseKey] = payload;
+                if (prevCount > 0) {
+                    removals.push(metaKey);
+                    for (let i = 0; i < prevCount; i += 1) {
+                        removals.push(`${chunkPrefix}${i}`);
+                    }
+                }
+                if (id === ROOT_FOLDER_ID) {
+                    this._rootChunkCount = 0;
+                } else {
+                    this._folderChunkCounts.set(id, 0);
+                }
+                return;
+            }
+            const chunkCount = Math.ceil(serialized.length / CHUNK_SIZE);
+            for (let i = 0; i < chunkCount; i += 1) {
+                const start = i * CHUNK_SIZE;
+                const end = start + CHUNK_SIZE;
+                setObj[`${chunkPrefix}${i}`] = serialized.slice(start, end);
+            }
+            setObj[metaKey] = { chunkCount };
+            removals.push(baseKey);
+            if (prevCount > chunkCount) {
+                for (let i = chunkCount; i < prevCount; i += 1) {
+                    removals.push(`${chunkPrefix}${i}`);
+                }
+            }
+            if (id === ROOT_FOLDER_ID) {
+                this._rootChunkCount = chunkCount;
+            } else {
+                this._folderChunkCounts.set(id, chunkCount);
+            }
         }
     }
 

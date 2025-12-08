@@ -203,7 +203,20 @@
         try {
             statusEl.textContent = "Preparing download...";
             const data = await storage.dumpAll();
-            const serialized = JSON.stringify(data || {}, null, 2);
+            let ordered = {};
+            if (data && typeof data === "object") {
+                ordered = {};
+                if (Object.prototype.hasOwnProperty.call(data, "settings")) {
+                    ordered.settings = data.settings;
+                }
+                Object.keys(data)
+                    .filter((key) => key !== "settings")
+                    .sort()
+                    .forEach((key) => {
+                        ordered[key] = data[key];
+                    });
+            }
+            const serialized = JSON.stringify(ordered);
             const blob = new Blob([serialized], { type: "application/json" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");

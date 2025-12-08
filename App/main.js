@@ -146,10 +146,8 @@
             container.appendChild(handle);
             sidebarResizerEl = handle;
         }
-        const storedWidth = layoutState ? layoutState.getSidebarWidth() : null;
-        if (typeof storedWidth === "number") {
-            applySidebarWidth(storedWidth);
-        }
+        const storedWidth = globalSettings ? globalSettings.getSidebarWidth() : null;
+        applySidebarWidth(typeof storedWidth === "number" ? storedWidth : null);
     }
 
     function onSidebarResizeStart(event) {
@@ -184,8 +182,8 @@
             ? sidebarContainer.getBoundingClientRect().width
             : null;
         sidebarResizeSession = null;
-        if (layoutState && typeof finalWidth === "number") {
-            layoutState.setSidebarWidth(finalWidth);
+        if (globalSettings && typeof finalWidth === "number") {
+            globalSettings.setSidebarWidth(finalWidth).catch(() => {});
         }
     }
 
@@ -208,8 +206,9 @@
         if (root) {
             root.classList.toggle("glyn-sidebar-handle-visible", !!showHandle);
         }
-        if (options && options.persist) {
-            scheduleSave({ immediate: true });
+        if (ENABLE_SIDEBAR_RESIZER) {
+            const savedWidth = globalSettings ? globalSettings.getSidebarWidth() : null;
+            applySidebarWidth(typeof savedWidth === "number" ? savedWidth : null);
         }
     }
 
@@ -758,12 +757,6 @@
                 }
             })
             .finally(() => {
-                if (ENABLE_SIDEBAR_RESIZER) {
-                    const savedWidth = layoutState ? layoutState.getSidebarWidth() : null;
-                    if (typeof savedWidth === "number") {
-                        applySidebarWidth(savedWidth);
-                    }
-                }
                 bindChangeHandlers();
                 enforceFoldersTopOrder();
                 monitorLazyLoadSentinel();

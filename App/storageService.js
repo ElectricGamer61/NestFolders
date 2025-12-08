@@ -22,15 +22,55 @@
                 return {
                     get: (keys, callback) => {
                         const result = {};
-                        Object.keys(keys).forEach((key) => {
-                            const raw = window.localStorage.getItem(key);
-                            result[key] = raw ? JSON.parse(raw) : keys[key];
+                        if (keys === null || typeof keys === "undefined") {
+                            for (let i = 0; i < window.localStorage.length; i += 1) {
+                                const key = window.localStorage.key(i);
+                                if (!key) continue;
+                                const rawValue = window.localStorage.getItem(key);
+                                try {
+                                    result[key] = rawValue !== null ? JSON.parse(rawValue) : null;
+                                } catch (_err) {
+                                    result[key] = rawValue;
+                                }
+                            }
+                            callback(result);
+                            return;
+                        }
+                        const keyList = Array.isArray(keys)
+                            ? keys
+                            : typeof keys === "object"
+                                ? Object.keys(keys)
+                                : [keys];
+                        keyList.forEach((key) => {
+                            const rawValue = window.localStorage.getItem(key);
+                            if (rawValue !== null) {
+                                try {
+                                    result[key] = JSON.parse(rawValue);
+                                } catch (_err) {
+                                    result[key] = rawValue;
+                                }
+                            } else if (keys && typeof keys === "object" && !Array.isArray(keys)) {
+                                result[key] = keys[key];
+                            }
                         });
                         callback(result);
                     },
                     set: (items, callback) => {
-                        Object.keys(items).forEach((key) => {
+                        Object.keys(items || {}).forEach((key) => {
                             window.localStorage.setItem(key, JSON.stringify(items[key]));
+                        });
+                        if (callback) callback();
+                    },
+                    remove: (keys, callback) => {
+                        if (typeof keys === "undefined" || keys === null) {
+                            if (callback) callback();
+                            return;
+                        }
+                        const list = Array.isArray(keys) ? keys : [keys];
+                        list.forEach((key) => {
+                            if (typeof key === "string") {
+                                window.localStorage.removeItem(key);
+                            }
                         });
                         if (callback) callback();
                     }
