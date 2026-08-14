@@ -2,6 +2,7 @@
     // @meta FolderItem models a sidebar folder row, handling children, metadata, and inline UI state.
     const ns = (window.GlynGPT = window.GlynGPT || {});
     const DraggableElement = ns.DraggableElement;
+    const site = ns.site;
 
     class FolderItem extends DraggableElement {
         constructor(rowEl, folderId, options) {
@@ -237,11 +238,8 @@
         deleteToRoot(historyDiv) {
             if (!historyDiv || !this.wrapperEl) return;
 
-            const links = Array.from(
-                this.wrapperEl.querySelectorAll("a.__menu-item")
-            );
-            links.forEach((link) => {
-                historyDiv.appendChild(link);
+            site.queryChatRows(this.wrapperEl).forEach((row) => {
+                historyDiv.appendChild(row);
             });
 
             if (this.wrapperEl.parentNode) {

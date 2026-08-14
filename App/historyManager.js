@@ -1,6 +1,7 @@
 (function () {
     // @meta HistoryManager keeps track of root-level chat ordering and emits layout change events.
     const ns = (window.GlynGPT = window.GlynGPT || {});
+    const site = ns.site;
 
     class HistoryManager {
         constructor() {
@@ -30,9 +31,9 @@
             }
         }
 
-        ensureChatOrderFromLinks(links) {
-            const hrefs = Array.from(links)
-                .map(link => link.getAttribute("href") || "")
+        ensureChatOrderFromLinks(rows) {
+            const hrefs = Array.from(rows)
+                .map(row => site.hrefOf(row))
                 .filter(Boolean);
 
             let changed = false;
@@ -102,22 +103,22 @@
             }
         }
 
-        resetFromLinks(links) {
+        resetFromLinks(rows) {
             this.chatOrder = [];
-            this.ensureChatOrderFromLinks(links);
+            this.ensureChatOrderFromLinks(rows);
         }
 
-        applyChatOrderToDOM(historyDiv, links) {
+        applyChatOrderToDOM(historyDiv, rows) {
             if (!historyDiv) return;
             const map = new Map();
-            links.forEach(link => {
-                const href = link.getAttribute("href") || "";
-                if (href) map.set(href, link);
+            rows.forEach(row => {
+                const href = site.hrefOf(row);
+                if (href) map.set(href, row);
             });
 
             this.chatOrder.forEach(href => {
-                const link = map.get(href);
-                if (link) historyDiv.appendChild(link);
+                const row = map.get(href);
+                if (row) historyDiv.appendChild(row);
             });
         }
     }

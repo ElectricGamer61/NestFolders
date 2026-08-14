@@ -2,7 +2,7 @@
   // @meta FolderManager owns folder creation, lookup, and persistence hooks for the sidebar tree.
   const ns = (window.GlynGPT = window.GlynGPT || {});
   const FolderItem = ns.FolderItem;
-  const ChatItem = ns.ChatItem;
+  const site = ns.site;
 
   class FolderManager {
     constructor(historyDiv, historyManager, folderMenu) {
@@ -249,19 +249,20 @@
       };
       this.folders.forEach(ensureMount);
       this.removeDuplicateWrappers();
-      console.debug("[GlynGPT][Folders] ensureFolderMounts()", {
-        total: this.folders.length,
-        reattached
-      });
     }
 
     pinFoldersAtTop() {
       if (!this.historyDiv || !this.folders.length) return;
-      const rootWrappers = this.folders
-        .filter(rec => rec && rec.folderItem && !rec.folderItem.getParentFolder())
-        .map(rec => rec.wrapperEl)
-        .filter(el => el && el.parentNode === this.historyDiv);
+      // Collected in DOM order, not creation order, so that pinning never undoes a folder
+      // the user has just dragged into a new position.
+      const known = new Set(
+        this.folders
+          .filter(rec => rec && rec.folderItem && !rec.folderItem.getParentFolder())
+          .map(rec => rec.wrapperEl)
+      );
+      const rootWrappers = Array.from(this.historyDiv.children).filter(el => known.has(el));
       if (!rootWrappers.length) return;
+      if (this._foldersAlreadyPinned(rootWrappers)) return;
       this.removeDuplicateWrappers();
       const fragment = document.createDocumentFragment();
       rootWrappers.forEach(wrapper => fragment.appendChild(wrapper));
@@ -273,6 +274,18 @@
       } else {
         this.historyDiv.appendChild(fragment);
       }
+    }
+
+    // Re-pinning rewrites the DOM, which wakes the sidebar mutation observer and would
+    // schedule another pin forever. Doing nothing when the order is already correct keeps
+    // that loop from ever starting.
+    _foldersAlreadyPinned(rootWrappers) {
+      const children = Array.from(this.historyDiv.children);
+      if (children.length < rootWrappers.length) return false;
+      for (let i = 0; i < rootWrappers.length; i += 1) {
+        if (children[i] !== rootWrappers[i]) return false;
+      }
+      return true;
     }
 
     removeDuplicateWrappers() {
@@ -308,7 +321,8 @@
 
     moveFolderBeforeElement(folderItem, targetEl) {
       if (!folderItem || !targetEl) return;
-      const topEl = targetEl.closest(".glyn-folder-wrapper, a.__menu-item");
+      const topEl = targetEl.closest(".glyn-folder-wrapper") ||
+        (site.linkFromRow(targetEl) ? site.rowFromLink(site.linkFromRow(targetEl)) : null);
       const container = this._getContainerForNode(topEl || targetEl);
       this.moveFolderToContainer(folderItem, container, topEl || targetEl);
     }
@@ -366,26 +380,27 @@
 
     moveChatIntoFolder(folderItem, chatHref) {
       if (!folderItem || !chatHref) return;
-      const link = this._findChatLink(chatHref);
-      if (!link) return;
-      const chatItem = link.__glynChatItem;
+      const row = this._findChatRow(chatHref);
+      if (!row) return;
+      const chatItem = row.__glynChatItem;
       if (!chatItem) return;
       if (this.historyManager && typeof this.historyManager.removeChat === "function") {
         this.historyManager.removeChat(chatHref);
       }
       folderItem.addChild(chatItem);
       if (folderItem.contentsEl) {
-        folderItem.contentsEl.appendChild(link);
+        folderItem.contentsEl.appendChild(row);
       }
       if (typeof folderItem.syncChildrenFromDOM === "function") {
         folderItem.syncChildrenFromDOM();
       }
     }
 
-    _findChatLink(chatHref) {
+    _findChatRow(chatHref) {
       if (!this.historyDiv || !chatHref) return null;
-      const links = Array.from(this.historyDiv.querySelectorAll("a.__menu-item"));
-      return links.find(link => (link.getAttribute("href") || "") === chatHref) || null;
+      const target = site.normalizeHref(chatHref);
+      return site.queryChatRows(this.historyDiv)
+        .find(row => site.hrefOf(row) === target) || null;
     }
 
     clearAllFolders() {
@@ -396,8 +411,7 @@
         if (folder) {
           folder.deleteToRoot(this.historyDiv);
         } else {
-          const chats = Array.from(wrapper.querySelectorAll("a.__menu-item"));
-          chats.forEach(link => this.historyDiv.appendChild(link));
+          site.queryChatRows(wrapper).forEach(row => this.historyDiv.appendChild(row));
           wrapper.remove();
         }
       });
@@ -405,9 +419,7 @@
     }
 
     getRootChatLinks() {
-      return Array.from(this.historyDiv.children).filter(el =>
-        el.matches("a.__menu-item")
-      );
+      return site.childRows(this.historyDiv);
     }
 
     refreshAllFolderIcons() {

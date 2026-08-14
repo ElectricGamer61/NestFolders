@@ -21,6 +21,9 @@
         return;
     }
 
+    const SUPPORTED_HOSTS = ["chatgpt.com", "www.chatgpt.com", "chat.openai.com", "claude.ai", "www.claude.ai"];
+    const OPEN_A_SUPPORTED_APP = "Open chatgpt.com or claude.ai and try again.";
+
     const storage = new StorageService({ area: "sync", storageKey: "glynGptState" });
     const settings = new GlobalSettings(storage);
     let loading = true;
@@ -45,7 +48,7 @@
             applyUI(values);
             attachHandlers();
         } catch (err) {
-            console.warn("[GlynGPT] Failed to load settings", err);
+            console.warn("[NestFolders] Failed to load settings", err);
             statusEl.textContent = "Unable to load settings.";
             disableControls(true);
         } finally {
@@ -127,7 +130,7 @@
             });
             statusEl.textContent = "Settings saved.";
         } catch (err) {
-            console.warn("[GlynGPT] Failed to save settings", err);
+            console.warn("[NestFolders] Failed to save settings", err);
             statusEl.textContent = "Could not save settings.";
         } finally {
             disableControls(false);
@@ -153,8 +156,8 @@
                     return;
                 }
                 const tab = tabs[0];
-                if (!isChatGptTab(tab)) {
-                    resolve({ ok: false, error: "not-chatgpt-tab", isConnectionError: true });
+                if (!isSupportedTab(tab)) {
+                    resolve({ ok: false, error: "unsupported-tab", isConnectionError: true });
                     return;
                 }
                 chrome.tabs.sendMessage(tab.id, message, (response) => {
@@ -176,7 +179,7 @@
             const response = await notifyActiveTab({ glynCommand: command });
             handleActionResponse(response, successMessage || "Done.", "Unable to update folders");
         } catch (err) {
-            console.warn("[GlynGPT] Failed to update folders", err);
+            console.warn("[NestFolders] Failed to update folders", err);
             statusEl.textContent = "Could not update folders.";
         } finally {
             setBulkButtonsDisabled(false);
@@ -190,13 +193,13 @@
         }
         if (response && response.error) {
             if (response.isConnectionError) {
-                statusEl.textContent = "Please open chatgpt.com and try again.";
+                statusEl.textContent = OPEN_A_SUPPORTED_APP;
             } else {
                 statusEl.textContent = `${failurePrefix} (${response.error}).`;
             }
             return;
         }
-        statusEl.textContent = "Please open chatgpt.com and try again.";
+        statusEl.textContent = OPEN_A_SUPPORTED_APP;
     }
 
     async function exportDataSnapshot() {
@@ -221,14 +224,14 @@
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = "chatgpt-folders-data.json";
+            a.download = "nestfolders-backup.json";
             document.body.appendChild(a);
             a.click();
             a.remove();
             URL.revokeObjectURL(url);
             statusEl.textContent = "Data downloaded.";
         } catch (err) {
-            console.warn("[GlynGPT] Failed to export data", err);
+            console.warn("[NestFolders] Failed to export data", err);
             statusEl.textContent = "Could not export data.";
         }
     }
@@ -245,28 +248,28 @@
                     throw new Error("invalid-json");
                 }
                 await storage.overwriteAll(parsed);
-                statusEl.textContent = "Import complete. Reload chatgpt.com to apply.";
+                statusEl.textContent = "Import complete. Reload the ChatGPT or Claude tab to apply.";
             } catch (err) {
-                console.warn("[GlynGPT] Failed to import data", err);
+                console.warn("[NestFolders] Failed to import data", err);
                 statusEl.textContent = "Could not import data. Please select a valid JSON export.";
             } finally {
                 importDataBtn.disabled = false;
             }
         };
         reader.onerror = () => {
-            console.warn("[GlynGPT] Failed to read file", reader.error);
+            console.warn("[NestFolders] Failed to read file", reader.error);
             statusEl.textContent = "Could not read the selected file.";
             importDataBtn.disabled = false;
         };
         reader.readAsText(file);
     }
 
-    function isChatGptTab(tab) {
+    // Kept in step with the manifest's content_scripts matches.
+    function isSupportedTab(tab) {
         if (!tab || !tab.url) return false;
         try {
-            const url = new URL(tab.url);
-            const host = (url.hostname || "").toLowerCase();
-            return host === "chatgpt.com";
+            const host = (new URL(tab.url).hostname || "").toLowerCase();
+            return SUPPORTED_HOSTS.includes(host);
         } catch (_err) {
             return false;
         }

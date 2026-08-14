@@ -1,0 +1,13 @@
+{
+  "name": "nestfolders",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Nested folders & project organization for ChatGPT and Claude.",
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.0"
+  },
+  "license": "MIT"
+}

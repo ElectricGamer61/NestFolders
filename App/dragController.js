@@ -1,13 +1,13 @@
 (function () {
   // @meta DragController orchestrates drag-and-drop behavior between chats and folders in the sidebar.
   const ns = (window.GlynGPT = window.GlynGPT || {});
+  const site = ns.site;
 
   class DragController {
     constructor(historyDiv, historyManager, folderManager) {
       this.historyDiv = historyDiv;
       this.historyManager = historyManager;
       this.folderManager = folderManager;
-      this.debugPrefix = "[GlynGPT][DragController]";
     }
 
     // Find the folder record whose contentsEl currently contains the given chat element
@@ -27,12 +27,6 @@
       if (!folderItem || !chatItem) return;
 
       const href = chatItem.id;
-      console.log(this.debugPrefix, "moveChatToFolder", {
-        href,
-        folder: folderItem.data && folderItem.data.name,
-        before: beforeChatItem ? beforeChatItem.id : null
-      });
-
       // If the chat is currently in the root history, remove it from the root order
       if (this.historyDiv && this.historyDiv.contains(chatItem.el)) {
         if (this.historyManager && typeof this.historyManager.removeChat === "function") {
@@ -78,12 +72,6 @@
       if (!chatItem || !this.historyDiv) return;
 
       const href = chatItem.id;
-      console.log(this.debugPrefix, "moveChatFromFolderToRoot", {
-        href,
-        target: targetChatItem ? targetChatItem.id : null,
-        beforeNodeTag: beforeNode ? beforeNode.tagName : null
-      });
-
       // Remove from whatever folder currently owns it
       const fromRec = this.findFolderRecordForChatEl(chatItem.el);
       if (fromRec && fromRec.folderItem && Array.isArray(fromRec.folderItem.children)) {
@@ -112,15 +100,6 @@
 
       const resolvedContainer = this._resolveContainer(containerEl);
       const isRootContainer = resolvedContainer === this.historyDiv;
-      console.log(this.debugPrefix, "handleDrop", {
-        sourceType: source.type,
-        sourceId: source.id,
-        targetType: target ? target.type : null,
-        targetId: target ? target.id : null,
-        isRootContainer,
-        containerElTag: containerEl ? containerEl.tagName : null
-      });
-
       // --- FOLDER SOURCE (reordering only) ---
       if (source.type === "folder") {
         this._handleFolderDrop(source, target, containerEl, resolvedContainer);
@@ -189,11 +168,6 @@
       if (!target) {
         // Special case: dropping a chat from a folder into an "empty" root area
         const inFolderRecord = this.findFolderRecordForChatEl(source.el);
-        console.log(this.debugPrefix, "handleDrop:noTarget", {
-          sourceType: source.type,
-          isRootContainer,
-          inFolderRecord: !!inFolderRecord
-        });
         if (isRootContainer && inFolderRecord) {
           this.moveChatFromFolderToRoot(source, null, null);
         }
@@ -251,9 +225,9 @@
           typeof this.folderManager.getRootChatLinks !== "function") {
         return;
       }
-      const links = this.folderManager.getRootChatLinks();
-      const hrefs = links
-        .map(link => link.getAttribute("href") || "")
+      const rows = this.folderManager.getRootChatLinks();
+      const hrefs = rows
+        .map(row => site.hrefOf(row))
         .filter(Boolean);
       if (typeof this.historyManager.setOrder === "function") {
         this.historyManager.setOrder(hrefs);

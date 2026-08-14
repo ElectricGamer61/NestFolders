@@ -1,8 +1,8 @@
-# Privacy Policy — ChatGPT Folders
-Last updated: December 4th 2025
+# Privacy Policy — NestFolders
+Last updated: August 14th 2026
 
 ## 1. Introduction
-ChatGPT Folders (“the Extension”) is a Chrome browser extension that allows users to organise their ChatGPT conversations into folders.  
+NestFolders (“the Extension”) is a Chrome browser extension that allows users to organise their ChatGPT and Claude conversations into nested folders.  
 This Privacy Policy explains what data the Extension stores, how it is used, and what it does not collect.
 
 The Extension is designed with privacy as a core principle.
@@ -18,10 +18,11 @@ All stored data is kept inside `chrome.storage.sync`, allowing your folder struc
 These are simple UI preference values such as:
 
 - folder icon style
+- whether the sidebar resize handle is shown, and the sidebar width (ChatGPT only)
 
 Example:
 `{
-  "globalSettings": {
+  "settings": {
     "folderIconStyle": "fill"
   }
 }
@@ -37,9 +38,13 @@ The Extension saves the folder structure you create, including:
 - folder colours
 - expanded/collapsed states
 - nested folder hierarchy
-- ChatGPT conversation IDs - see below:
+- conversation IDs and the conversation title shown in the sidebar - see below:
 
-Conversation IDs (e.g., `/c/xxxxxxxx`) do not reveal chat content and are used solely to associate chats with folders.
+Conversation IDs (`/c/xxxxxxxx` on ChatGPT, `/chat/xxxxxxxx` on Claude) do not reveal chat content and are used solely to associate chats with folders.
+
+The Extension also stores the conversation **title exactly as the app already displays it in your sidebar**, truncated to 120 characters. This is required so that a chat filed in a folder can still be listed there after the app stops showing it in its recent conversations - Claude lists only recent chats, and ChatGPT pages its history. The title is read from the sidebar link only; the Extension never opens, requests, or reads a conversation.
+
+ChatGPT and Claude layouts are stored under separate key namespaces, so the two apps' folders never mix.
 
 Example:
 
@@ -53,13 +58,13 @@ Example:
         "expanded": true,
         "color": "#009dff",
         "children": [
-          { "id": "/c/xxxxxx", "type": "chat" },
+          { "id": "/c/xxxxxx", "type": "chat", "title": "Roadmap planning" },
           {
             "id": "folder-2",
             "name": "Child 1",
             "type": "folder",
             "children": [
-              { "id": "/c/yyyyyy", "type": "chat" }
+              { "id": "/c/yyyyyy", "type": "chat", "title": "Bug triage" }
             ]
           }
         ]
@@ -68,14 +73,13 @@ Example:
   }
 }`
 
-The Extension does not access, download, analyse, or store conversation text or titles.
+The Extension does not access, download, or analyse conversation text.
 <br><br>
 
 ## 3. Information the Extension Does Not Collect
 The Extension does not collect, store, transmit, or analyse:
-- Any ChatGPT message content
-- Anything typed into ChatGPT
-- Conversation titles
+- Any ChatGPT or Claude message content
+- Anything you type into ChatGPT or Claude
 - Personal information or account details
 - Cookies or authentication tokens
 - Browser history
@@ -98,8 +102,11 @@ The Extension uses the following Chrome permissions:
 `storage`  
 (Required to save folder structure and user settings).
 
-Host permissions (ChatGPT domain)  
-Used exclusively to insert the folder UI into the ChatGPT page.  
+`tabs`  
+(Required so the popup can send commands - such as “create folder” - to the ChatGPT or Claude tab you are viewing).
+
+Host permissions (`https://chatgpt.com/*` and `https://claude.ai/*`)  
+Used exclusively to insert the folder UI into those pages.  
 The Extension does not access message content or modify network requests.  
 <br><br>
 
@@ -124,4 +131,4 @@ The revision date at the top will reflect the most recent version.
 
 ## 9. Contact
 For questions, feature suggestions, or privacy concerns, please submit an issue via:
-https://github.com/glyndavidson/chatgpt-folders/issues
+https://github.com/ElectricGamer61/NestFolders/issues
