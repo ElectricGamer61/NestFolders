@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT Folders",
-  "version": "1.0.1",
-  "description": "Reorder ChatGPT conversations and organise into folders.",
+  "name": "NestFolders",
+  "version": "1.1.0",
+  "description": "Nested folders & project organization for ChatGPT and Claude - bring order to your AI chat history.",
   "icons": {
     "16": "icon16.png",
     "32": "icon32.png",
@@ -15,7 +15,7 @@
     "tabs"
   ],
   "action": {
-    "default_title": "ChatGPT Folders",
+    "default_title": "NestFolders",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icon16.png",
@@ -26,14 +26,17 @@
     }
   },
   "host_permissions": [
-    "https://chatgpt.com/*"
+    "https://chatgpt.com/*",
+    "https://claude.ai/*"
   ],
   "content_scripts": [
     {
       "matches": [
-        "https://chatgpt.com/*"
+        "https://chatgpt.com/*",
+        "https://claude.ai/*"
       ],
       "js": [
+        "siteAdapter.js",
         "draggableElement.js",
         "chatItem.js",
         "icons.js",

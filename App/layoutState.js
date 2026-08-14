@@ -1,6 +1,9 @@
  (function () {
     // @meta LayoutState stores folders/chats using compact records split across storage keys.
+    // Keys are namespaced per host by the site adapter, so ChatGPT and Claude layouts live
+    // side by side in the same storage area without overwriting each other.
     const ns = (window.GlynGPT = window.GlynGPT || {});
+    const site = ns.site;
 
     const LAYOUT_VERSION = 2;
     const ROOT_FOLDER_ID = 0;
@@ -8,6 +11,7 @@
     const META_SUFFIX = "__meta";
     const CHUNK_SUFFIX = "__chunk_";
     const CHUNK_SIZE = 7000;
+    const TITLE_MAX_LENGTH = 120;
 
     class LayoutState {
         constructor(storageService, folderManager, historyManager) {
@@ -61,15 +65,24 @@
             const rawEntries = Array.isArray(rootPayload.ch) ? rootPayload.ch : [];
             const entries = rawEntries.filter((entry) => entry && entry.t === "f");
             if (folderPayloadMap && folderPayloadMap.size) {
-                const missing = new Set(Array.from(folderPayloadMap.keys()));
-                entries.forEach((entry) => missing.delete(entry.i));
-                missing.forEach((id) => entries.push({ t: "f", i: id }));
+                // Recover folders whose record survived but whose parent no longer lists them.
+                // Only genuinely orphaned ids may be re-mounted at the root: a nested folder is
+                // already reached through its parent, and adding it here as well would build it
+                // twice and split its chats between the two copies.
+                const referenced = new Set();
+                entries.forEach((entry) => referenced.add(entry.i));
+                folderPayloadMap.forEach((payload) => {
+                    const children = Array.isArray(payload.ch) ? payload.ch : [];
+                    children.forEach((child) => {
+                        if (child && child.t === "f") referenced.add(child.i);
+                    });
+                });
+                folderPayloadMap.forEach((_payload, id) => {
+                    if (!referenced.has(id)) {
+                        entries.push({ t: "f", i: id });
+                    }
+                });
             }
-
-            console.info("[GlynGPT][Layout] Restoring folders", JSON.stringify({
-                requested: entries.length,
-                storedFolders: folderPayloadMap.size
-            }));
 
             const chatMap = this._collectChatMap();
             this._applyEntries(
@@ -79,12 +92,11 @@
                 folderPayloadMap,
                 chatMap
             );
-            console.info("[GlynGPT][Layout] After apply entries, folder count:", this.folderManager.folders.length);
             if (!this.folderManager.folders.length && folderPayloadMap && folderPayloadMap.size) {
                 const fallback = Array.from(folderPayloadMap.keys())
                     .sort((a, b) => a - b)
                     .map((id) => ({ t: "f", i: id }));
-                console.warn("[GlynGPT][Layout] No folders mounted after first pass. Applying fallback list.");
+                console.warn("[NestFolders] No folders mounted after first pass. Applying fallback list.");
                 this._applyEntries(
                     fallback,
                     this.folderManager.historyDiv,
@@ -92,7 +104,6 @@
                     folderPayloadMap,
                     chatMap
                 );
-                console.warn("[GlynGPT][Layout] Fallback applied. Folder count:", this.folderManager.folders.length);
             }
 
             const rootLinks = this.folderManager.getRootChatLinks();
@@ -119,12 +130,11 @@
             const scope = this.folderManager && this.folderManager.historyDiv
                 ? this.folderManager.historyDiv
                 : document;
-            const links = Array.from(scope.querySelectorAll("a.__menu-item"));
             const map = new Map();
-            links.forEach((link) => {
-                const href = link.getAttribute("href") || "";
+            site.queryChatRows(scope).forEach((row) => {
+                const href = site.hrefOf(row);
                 if (href && !map.has(href)) {
-                    map.set(href, link);
+                    map.set(href, row);
                 }
             });
             return map;
@@ -138,14 +148,14 @@
                 if (entry.t === "c") {
                     const href = this._expandChatId(entry.i);
                     if (!href) return;
-                    const link = chatMap.get(href);
-                    if (!link) {
-                        this._registerPendingChat(entry.i, containerEl, parentFolder);
+                    const row = chatMap.get(href);
+                    if (!row) {
+                        this._registerPendingChat(entry.i, entry.n, containerEl, parentFolder);
                         return;
                     }
-                    containerEl.appendChild(link);
-                    if (parentFolder && link.__glynChatItem) {
-                        parentFolder.addChild(link.__glynChatItem);
+                    containerEl.appendChild(row);
+                    if (parentFolder && row.__glynChatItem) {
+                        parentFolder.addChild(row.__glynChatItem);
                     }
                     return;
                 }
@@ -154,10 +164,8 @@
                     const folderPayload = folderPayloadMap.get(entry.i);
                     if (!folderPayload) return;
                     const folderId = this._folderIdFromNumber(entry.i);
-                    console.debug("[GlynGPT][Layout] Creating folder", folderPayload.n || "Folder", {
-                        id: folderId,
-                        parent: parentFolder ? parentFolder.id : null
-                    });
+                    // Never build the same stored folder twice, whatever the payload claims.
+                    if (this.folderManager.getRecordById(folderId)) return;
                     const folder = this.folderManager.createFolder(folderPayload.n || "Folder", {
                         id: folderId,
                         color: folderPayload["#"] ? `#${folderPayload["#"]}` : null,
@@ -186,7 +194,14 @@
             });
         }
 
-        _registerPendingChat(chatId, containerEl, parentFolder) {
+        /**
+         * A chat can be filed in a folder without being present in the sidebar: Claude only
+         * lists recent conversations and ChatGPT pages its history. Rather than dropping the
+         * assignment, we render a stub row - a real link to the conversation, carrying the
+         * title captured when it was last seen - which behaves like any other chat row and is
+         * swapped for the live row if the sidebar later renders it.
+         */
+        _registerPendingChat(chatId, title, containerEl, parentFolder) {
             if (!containerEl) {
                 containerEl = this.folderManager ? this.folderManager.historyDiv : null;
             }
@@ -195,21 +210,42 @@
             const compactId = this._compactChatId(expanded);
             if (!compactId || this.pendingAssignments.has(compactId)) return;
 
-            const placeholder = document.createElement("div");
-            placeholder.className = "glyn-chat-placeholder";
-            placeholder.dataset.chatId = compactId;
-            placeholder.textContent = "Loading conversation...";
-
-            containerEl.appendChild(placeholder);
+            const stub = this._createStubRow(compactId, title);
+            containerEl.appendChild(stub);
+            if (parentFolder && stub.__glynChatItem) {
+                parentFolder.addChild(stub.__glynChatItem);
+            }
 
             this.pendingAssignments.set(compactId, {
                 container: containerEl,
                 parentFolder,
-                placeholder
+                placeholder: stub
             });
-            console.debug("[GlynGPT][Layout] Registered pending chat", compactId, {
-                parentFolder: parentFolder ? parentFolder.id : null
-            });
+        }
+
+        _createStubRow(compactId, title) {
+            const href = this._expandChatId(compactId);
+            const stub = document.createElement("div");
+            stub.className = "glyn-chat-stub";
+            stub.dataset.chatId = compactId;
+
+            const link = document.createElement("a");
+            link.className = "glyn-chat-stub-link";
+            link.href = href;
+            link.textContent = title || "Saved chat";
+            link.title = title || href;
+            stub.appendChild(link);
+            if (title) {
+                stub.dataset.chatTitle = title;
+            }
+
+            const ChatItem = ns.ChatItem;
+            if (ChatItem) {
+                const item = new ChatItem(stub, href, title || "");
+                stub.__glynChatItem = item;
+                item.enableDrag();
+            }
+            return stub;
         }
 
         _clearPendingPlaceholders() {
@@ -220,7 +256,6 @@
                 }
             });
             this.pendingAssignments.clear();
-            console.debug("[GlynGPT][Layout] Cleared pending placeholders");
         }
 
         tryHydrateChat(chatItem) {
@@ -229,28 +264,38 @@
             if (!compactId) return false;
             const pending = this.pendingAssignments.get(compactId);
             if (!pending) return false;
-            const container = pending.container ||
+            const placeholder = pending.placeholder;
+            // The stub may have been dragged elsewhere since it was created, so its current
+            // parent - not the one recorded at restore time - is the authoritative location.
+            const container = (placeholder && placeholder.parentNode) ||
+                pending.container ||
                 (pending.parentFolder && pending.parentFolder.contentsEl) ||
                 (this.folderManager ? this.folderManager.historyDiv : null);
             if (!container) return false;
 
-            const placeholder = pending.placeholder;
             if (placeholder && placeholder.parentNode === container) {
                 container.insertBefore(chatItem.el, placeholder);
+                if (placeholder.__glynChatItem && pending.parentFolder &&
+                    typeof pending.parentFolder.removeChildById === "function") {
+                    pending.parentFolder.removeChildById(placeholder.__glynChatItem.id);
+                }
                 placeholder.parentNode.removeChild(placeholder);
             } else {
                 container.appendChild(chatItem.el);
             }
 
-            if (pending.parentFolder) {
-                pending.parentFolder.addChild(chatItem);
-                if (typeof pending.parentFolder.syncChildrenFromDOM === "function") {
-                    pending.parentFolder.syncChildrenFromDOM();
+            const folder = this.folderManager
+                ? this.folderManager.getRecordByContentsEl(container)
+                : null;
+            const parentFolder = (folder && folder.folderItem) || pending.parentFolder;
+            if (parentFolder) {
+                parentFolder.addChild(chatItem);
+                if (typeof parentFolder.syncChildrenFromDOM === "function") {
+                    parentFolder.syncChildrenFromDOM();
                 }
             }
 
             this.pendingAssignments.delete(compactId);
-            console.info("[GlynGPT][Layout] Hydrated delayed chat", compactId);
             return true;
         }
 
@@ -349,14 +394,17 @@
                     entries.push({ t: "f", i: idNum });
                     return;
                 }
-                if (includeChats && node.matches && node.matches("a.__menu-item")) {
-                    const href = node.getAttribute("href") || "";
-                    if (href) {
-                        const chatId = this._compactChatId(href);
-                        if (chatId) {
-                            entries.push({ t: "c", i: chatId });
-                        }
+                if (includeChats && site.isChatRow(node)) {
+                    const href = site.hrefOf(node);
+                    if (!href) return;
+                    const chatId = this._compactChatId(href);
+                    if (!chatId) return;
+                    const entry = { t: "c", i: chatId };
+                    const title = this._titleForRow(node);
+                    if (title) {
+                        entry.n = title;
                     }
+                    entries.push(entry);
                 }
             });
             return entries;
@@ -371,22 +419,33 @@
             const immediate = options && options.immediate;
             clearTimeout(this._saveTimer);
             if (immediate) {
-                this.save().catch(err => console.warn("[GlynGPT] Failed to save layout", err));
+                this.save().catch(err => console.warn("[NestFolders] Failed to save layout", err));
                 return;
             }
             this._saveTimer = setTimeout(() => {
-                this.save().catch(err => console.warn("[GlynGPT] Failed to save layout", err));
+                this.save().catch(err => console.warn("[NestFolders] Failed to save layout", err));
             }, 250);
         }
 
+        /**
+         * The conversation title as shown in the sidebar, trimmed to keep sync storage small.
+         * Titles are stored so a folder can still list a chat that has aged out of the
+         * sidebar; message content is never read.
+         */
+        _titleForRow(node) {
+            if (node.dataset && node.dataset.chatTitle) {
+                return node.dataset.chatTitle.slice(0, TITLE_MAX_LENGTH);
+            }
+            const title = site.titleOf(node);
+            return title ? title.slice(0, TITLE_MAX_LENGTH) : "";
+        }
+
         _compactChatId(href) {
-            if (!href) return null;
-            return href.replace(/^\/c\//, "");
+            return site.compactChatId(href);
         }
 
         _expandChatId(id) {
-            if (!id) return null;
-            return id.startsWith("/c/") ? id : `/c/${id}`;
+            return site.expandChatId(id);
         }
 
         _folderNumberFromId(id) {
@@ -403,7 +462,7 @@
         }
 
         _folderKey(id) {
-            return `${FOLDER_PREFIX}${id}`;
+            return site.storageKey(`${FOLDER_PREFIX}${id}`);
         }
 
         _metaKeyFor(id) {
@@ -437,14 +496,14 @@
                 try {
                     payload = JSON.parse(serialized);
                 } catch (_err) {
-                    console.warn("[GlynGPT] Invalid chunked payload:", baseKey);
+                    console.warn("[NestFolders] Invalid chunked payload:", baseKey);
                     return null;
                 }
             } else if (typeof payload === "string") {
                 try {
                     payload = JSON.parse(payload);
                 } catch (_err) {
-                    console.warn("[GlynGPT] Invalid payload:", baseKey);
+                    console.warn("[NestFolders] Invalid payload:", baseKey);
                     return null;
                 }
             }

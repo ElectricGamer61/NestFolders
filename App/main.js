@@ -1,6 +1,12 @@
 // @meta main.js bootstraps the content script, wiring managers, drag logic, and storage sync.
 (function () {
     const ns = (window.GlynGPT = window.GlynGPT || {});
+    const site = ns.site;
+    if (!site) {
+        // Not a host we support; the content script simply does nothing.
+        return;
+    }
+    const LOG = "[NestFolders]";
     const DraggableElement = ns.DraggableElement;
     const ChatItem = ns.ChatItem;
     const HistoryManager = ns.HistoryManager;
@@ -12,8 +18,8 @@
     const LayoutState = ns.LayoutState;
     const SIDEBAR_MIN_WIDTH = 220;
     const SIDEBAR_MAX_RATIO = 0.9; // 90% of viewport width
-    const SIDEBAR_WIDTH_VAR = "--sidebar-width";
-    const ENABLE_SIDEBAR_RESIZER = true;
+    const SIDEBAR_WIDTH_VAR = site.sidebarWidthVar;
+    const ENABLE_SIDEBAR_RESIZER = site.enableSidebarResizer;
     const ENABLE_SAFE_REINIT = true;
     const DEFAULT_SHOW_SIDEBAR_HANDLE = true;
 
@@ -37,8 +43,12 @@
     let sidebarContainer = null;
     let sidebarResizerEl = null;
     let sidebarResizeSession = null;
-    let sentinelObserver = null;
     let shortcutHandlerBound = false;
+    let themeObserver = null;
+    let themeMediaQuery = null;
+    let themeMediaListener = null;
+    let appliedTheme = null;
+    let historyScanScheduled = false;
 
     function scheduleSave(opts) {
         if (layoutState) {
@@ -48,19 +58,11 @@
 
     function findSidebarContainer() {
         if (!historyDiv) return null;
-        const nav = historyDiv.closest('nav[aria-label="Chat history"]');
-        if (!nav) return null;
-        return (
-            nav.closest('[data-testid="left-sidebar"]') ||
-            nav.closest('[data-testid="left-panel"]') ||
-            nav.closest("aside") ||
-            nav.parentElement ||
-            nav
-        );
+        return site.findSidebarContainer(historyDiv);
     }
 
     function applySidebarWidth(width) {
-        if (!ENABLE_SIDEBAR_RESIZER) return;
+        if (!ENABLE_SIDEBAR_RESIZER || !SIDEBAR_WIDTH_VAR) return;
         if (!sidebarContainer) return;
         const root = document.documentElement;
         if (!root) return;
@@ -213,30 +215,91 @@
     }
 
     function findHistoryContainer() {
-        const selectors = [
-            "#history",
-            '[data-testid="conversation-sidebar-list"]',
-            '[data-testid="conversation-list"]',
-            'nav[aria-label="Chat history"] ol',
-            'nav[aria-label="Chat history"] div[data-testid="conversation-list"]',
-            'nav[aria-label="Chat history"] div[role="presentation"]'
-        ];
-        for (const selector of selectors) {
-            const el = document.querySelector(selector);
-            if (el) {
-                return el;
+        return site.findHistoryContainer();
+    }
+
+    /**
+     * Folder chrome is injected into a host app we do not control, so it has to follow the
+     * host's light/dark theme. Rather than guessing at vendor theme classes, read the
+     * effective background of the sidebar and pick the matching palette.
+     */
+    function refreshThemeClass() {
+        const root = document.documentElement;
+        if (!root) return;
+        const probe = sidebarContainer || historyDiv || document.body;
+        if (!probe) return;
+        const next = isLightBackground(probe) ? "light" : "dark";
+        // Writing a class attribute queues a mutation record even when the value is
+        // unchanged, and this runs from a mutation observer - so only write on a real change,
+        // or the observer feeds itself forever.
+        if (next === appliedTheme) return;
+        appliedTheme = next;
+        root.classList.toggle("glyn-theme-light", next === "light");
+        root.classList.toggle("glyn-theme-dark", next === "dark");
+    }
+
+    function isLightBackground(startEl) {
+        let el = startEl;
+        while (el && el !== document.documentElement.parentElement) {
+            const parsed = parseRgb(window.getComputedStyle(el).backgroundColor);
+            if (parsed && parsed.a > 0.2) {
+                // Rec. 709 luma; above the midpoint we treat the surface as light.
+                return (0.2126 * parsed.r + 0.7152 * parsed.g + 0.0722 * parsed.b) > 140;
+            }
+            el = el.parentElement;
+        }
+        return !window.matchMedia || !window.matchMedia("(prefers-color-scheme: dark)").matches;
+    }
+
+    function parseRgb(value) {
+        const match = /rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,/\s]+([\d.]+))?/i.exec(value || "");
+        if (!match) return null;
+        return {
+            r: parseFloat(match[1]),
+            g: parseFloat(match[2]),
+            b: parseFloat(match[3]),
+            a: match[4] === undefined ? 1 : parseFloat(match[4])
+        };
+    }
+
+    function startThemeWatcher() {
+        stopThemeWatcher();
+        if (document.documentElement) {
+            document.documentElement.classList.add(`glyn-site-${site.key}`);
+        }
+        refreshThemeClass();
+        themeObserver = new MutationObserver(() => refreshThemeClass());
+        themeObserver.observe(document.documentElement, {
+            attributes: true,
+            attributeFilter: ["class", "style", "data-theme", "data-mode"]
+        });
+        if (document.body) {
+            themeObserver.observe(document.body, {
+                attributes: true,
+                attributeFilter: ["class", "style", "data-theme", "data-mode"]
+            });
+        }
+        if (window.matchMedia) {
+            const query = window.matchMedia("(prefers-color-scheme: dark)");
+            if (query && typeof query.addEventListener === "function") {
+                themeMediaQuery = query;
+                themeMediaListener = () => refreshThemeClass();
+                themeMediaQuery.addEventListener("change", themeMediaListener);
             }
         }
-        const nav = document.querySelector('nav[aria-label="Chat history"]');
-        if (nav) {
-            const scroll = Array.from(nav.querySelectorAll("div")).find(div =>
-                div.scrollHeight > div.clientHeight && div.querySelector("a.__menu-item")
-            );
-            if (scroll) {
-                return scroll;
-            }
+    }
+
+    function stopThemeWatcher() {
+        if (themeObserver) {
+            themeObserver.disconnect();
+            themeObserver = null;
         }
-        return null;
+        if (themeMediaQuery && themeMediaListener &&
+            typeof themeMediaQuery.removeEventListener === "function") {
+            themeMediaQuery.removeEventListener("change", themeMediaListener);
+        }
+        themeMediaQuery = null;
+        themeMediaListener = null;
     }
 
     function ensureMessageListener() {
@@ -283,7 +346,7 @@
                         if (sendResponse) sendResponse({ ok: true });
                     })
                     .catch(err => {
-                        console.warn("[GlynGPT] Failed to apply settings", err);
+                        console.warn("[NestFolders] Failed to apply settings", err);
                         if (sendResponse) sendResponse({ ok: false, error: "apply-failed" });
                     });
                 return true;
@@ -303,7 +366,7 @@
                         sendResponse({ ok: true, changed });
                     }
                 } catch (err) {
-                    console.warn("[GlynGPT] Failed to update folders", err);
+                    console.warn("[NestFolders] Failed to update folders", err);
                     if (sendResponse) {
                         sendResponse({ ok: false, error: "update-failed" });
                     }
@@ -330,13 +393,6 @@
         if (dropMarker) return;
         dropMarker = document.createElement("div");
         dropMarker.id = "glyn-drop-marker";
-        dropMarker.style.height = "20px";
-        dropMarker.style.margin = "4px 0 4px 6px";
-        dropMarker.style.background = "transparent";
-        dropMarker.style.border = "1px dashed rgba(255, 255, 255, 0.2)";
-        dropMarker.style.borderRadius = "8px";
-        dropMarker.style.boxSizing = "border-box";
-        dropMarker.style.opacity = "1";
         dropMarker.addEventListener("dragover", onDropMarkerDragOver);
         dropMarker.addEventListener("drop", onDropMarkerDrop);
     }
@@ -436,25 +492,18 @@
 
     function highlightFolderRow(rowEl) {
         if (highlightedFolderRow === rowEl) return;
-
         if (highlightedFolderRow) {
             unhighlightFolderRow(highlightedFolderRow);
         }
-
         highlightedFolderRow = rowEl;
-
-        if (!rowEl.dataset.glynPrevBg) {
-            rowEl.dataset.glynPrevBg = rowEl.style.backgroundColor || "";
+        if (rowEl) {
+            rowEl.classList.add("glyn-folder-row-drop-target");
         }
-        rowEl.style.backgroundColor = "#444";
     }
 
     function unhighlightFolderRow(rowEl) {
         if (!rowEl) return;
-        if (rowEl.dataset && typeof rowEl.dataset.glynPrevBg !== "undefined") {
-            rowEl.style.backgroundColor = rowEl.dataset.glynPrevBg;
-            delete rowEl.dataset.glynPrevBg;
-        }
+        rowEl.classList.remove("glyn-folder-row-drop-target");
         if (highlightedFolderRow === rowEl) {
             highlightedFolderRow = null;
         }
@@ -464,24 +513,26 @@
 
     function getRootChatLinks() {
         if (!historyDiv) return [];
-        return Array.from(historyDiv.children).filter(el =>
-            el.matches("a.__menu-item")
-        );
+        return site.childRows(historyDiv);
     }
 
     function makeRootLinksDraggable() {
         if (!historyDiv || !historyManager) return;
 
-        const links = getRootChatLinks();
-        historyManager.ensureChatOrderFromLinks(links);
+        const rows = getRootChatLinks();
+        historyManager.ensureChatOrderFromLinks(rows);
 
-        links.forEach(link => {
-            if (link.__glynChatItem) return;
-            const href = link.getAttribute("href") || "";
+        rows.forEach(row => {
+            if (row.__glynChatItem) {
+                if (layoutState && typeof layoutState.tryHydrateChat === "function") {
+                    layoutState.tryHydrateChat(row.__glynChatItem);
+                }
+                return;
+            }
+            const href = site.hrefOf(row);
             if (!href) return;
-            const title = link.innerText.trim();
-            const item = new ChatItem(link, href, title);
-            link.__glynChatItem = item;
+            const item = new ChatItem(row, href, site.titleOf(row));
+            row.__glynChatItem = item;
             item.enableDrag();
             if (layoutState && typeof layoutState.tryHydrateChat === "function") {
                 layoutState.tryHydrateChat(item);
@@ -489,28 +540,49 @@
         });
     }
 
-    function observeHistory() {
+    /**
+     * Both host apps re-render their chat list as you navigate, lazy-load older chats, or
+     * rename a conversation. Re-scan on every mutation so new chats become draggable and our
+     * folder wrappers survive the host's re-renders. The scan is coalesced into one animation
+     * frame and every step it calls is idempotent, so it cannot feed itself indefinitely.
+     */
+    function scanHistory() {
         makeRootLinksDraggable();
+        if (folderManager) {
+            if (typeof folderManager.removeDuplicateWrappers === "function") {
+                folderManager.removeDuplicateWrappers();
+            }
+            if (typeof folderManager.ensureFolderMounts === "function") {
+                folderManager.ensureFolderMounts();
+            }
+        }
         enforceFoldersTopOrder();
-        observeHistory();
+    }
+
+    function scheduleHistoryScan() {
+        if (historyScanScheduled) return;
+        historyScanScheduled = true;
+        const run = () => {
+            historyScanScheduled = false;
+            if (!historyDiv || !document.contains(historyDiv)) return;
+            scanHistory();
+        };
+        if (typeof window.requestAnimationFrame === "function") {
+            window.requestAnimationFrame(run);
+        } else {
+            setTimeout(run, 16);
+        }
+    }
+
+    function observeHistory() {
+        if (!historyDiv) return;
+        scanHistory();
 
         if (historyObserver) {
             historyObserver.disconnect();
         }
 
-        historyObserver = new MutationObserver(() => {
-            makeRootLinksDraggable();
-            if (folderManager) {
-                if (typeof folderManager.removeDuplicateWrappers === "function") {
-                    folderManager.removeDuplicateWrappers();
-                }
-                if (typeof folderManager.ensureFolderMounts === "function") {
-                    folderManager.ensureFolderMounts();
-                }
-            }
-            enforceFoldersTopOrder();
-        });
-
+        historyObserver = new MutationObserver(scheduleHistoryScan);
         historyObserver.observe(historyDiv, {
             childList: true,
             subtree: false
@@ -522,6 +594,7 @@
             historyObserver.disconnect();
             historyObserver = null;
         }
+        historyScanScheduled = false;
     }
 
     function handleGlobalShortcuts(event) {
@@ -560,43 +633,17 @@
         }
     }
 
-    function disconnectSentinelObserver() {
-        if (sentinelObserver) {
-            sentinelObserver.disconnect();
-            sentinelObserver = null;
-        }
-    }
-
-    function monitorLazyLoadSentinel() {
-        disconnectSentinelObserver();
-        if (!historyDiv) return;
-        const sentinel = historyDiv.querySelector('button[data-testid="history-paging-forward"]') ||
-            historyDiv.querySelector('[data-testid="pager-forward"]');
-        if (!sentinel) return;
-        sentinelObserver = new IntersectionObserver((entries) => {
-            entries.forEach((entry) => {
-                if (entry.isIntersecting) {
-                    console.log("[GlynGPT] Lazy sentinel intersected", { time: Date.now() });
-                }
-            });
-        }, {
-            root: historyDiv,
-            threshold: 0.1
-        });
-        sentinelObserver.observe(sentinel);
-    }
-
     function enterSafeMode(reason) {
         if (!ENABLE_SAFE_REINIT) return;
         if (safeModeActive) return;
         safeModeActive = true;
-        console.warn("[GlynGPT] Entering safe mode:", reason);
+        console.warn("[NestFolders] Entering safe mode:", reason);
         if (folderManager) {
             try {
                 folderManager.suspendNotifications();
                 folderManager.clearAllFolders();
             } catch (err) {
-                console.warn("[GlynGPT] Failed to clear folders during safe mode", err);
+                console.warn("[NestFolders] Failed to clear folders during safe mode", err);
             } finally {
                 folderManager.resumeNotifications();
             }
@@ -612,11 +659,12 @@
         enterSafeMode(reason);
         if (reinitPending) return;
         reinitPending = true;
-        console.warn("[GlynGPT] Reinitialising folders:", reason);
+        console.warn("[NestFolders] Reinitialising folders:", reason);
         stopHistoryObserver();
         stopContainerMonitor();
-        disconnectSentinelObserver();
+        stopThemeWatcher();
         hideDropMarker();
+        site.setHistoryContainer(null);
         if (ENABLE_SIDEBAR_RESIZER) {
             teardownSidebarResizer();
         }
@@ -635,6 +683,7 @@
     }
 
     function initOnceHistoryFound() {
+        site.setHistoryContainer(historyDiv);
         historyManager = new HistoryManager();
         folderMenu = new FolderMenu();
         folderManager = new FolderManager(historyDiv, historyManager, folderMenu);
@@ -658,6 +707,7 @@
         if (ENABLE_SIDEBAR_RESIZER) {
             setupSidebarResizer();
         }
+        startThemeWatcher();
         ensureMessageListener();
         if (!shortcutHandlerBound) {
             document.addEventListener("keydown", handleGlobalShortcuts, true);
@@ -696,10 +746,6 @@
             folderItem.inlineRename();
         };
         folderMenu.onChangeColor = (folderItem, color) => {
-            console.log("[GlynGPT] folderMenu.onChangeColor", {
-                folder: folderItem && folderItem.data,
-                color,
-            });
             if (folderItem && typeof folderItem.setColor === "function") {
                 folderItem.setColor(color);
             }
@@ -759,14 +805,20 @@
             .finally(() => {
                 bindChangeHandlers();
                 enforceFoldersTopOrder();
-                monitorLazyLoadSentinel();
+                observeHistory();
                 startContainerMonitor();
+                refreshThemeClass();
                 exitSafeMode();
+                console.info(LOG, `folders ready on ${site.label}`);
             });
     }
 
-    function init(maxAttempts = 20, delayMs = 250) {
+    // Both hosts are single-page apps: the sidebar can appear long after document_idle (slow
+    // network, collapsed sidebar, a route that renders no chat list yet). Poll quickly at
+    // first, then settle into a cheap idle poll rather than giving up on the page.
+    function init(fastAttempts = 20, fastDelayMs = 250, idleDelayMs = 2000) {
         let attempts = 0;
+        let warned = false;
 
         function check() {
             historyDiv = findHistoryContainer();
@@ -777,11 +829,11 @@
             }
 
             attempts += 1;
-            if (attempts < maxAttempts) {
-                setTimeout(check, delayMs);
-            } else {
-                console.warn("[GlynGPT] Could not find #history after retries.");
+            if (attempts >= fastAttempts && !warned) {
+                warned = true;
+                console.warn(LOG, `Waiting for the ${site.label} chat list to appear.`);
             }
+            setTimeout(check, attempts < fastAttempts ? fastDelayMs : idleDelayMs);
         }
 
         check();

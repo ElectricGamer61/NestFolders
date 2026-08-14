@@ -1,4 +1,56 @@
 /* @meta folders.css styles the custom folder rows, menus, and dialogs injected into the sidebar. */
+
+/*
+ * NestFolders renders inside two host apps with different (and user-switchable) themes, so
+ * every colour goes through a token. main.js measures the sidebar's real background and puts
+ * .glyn-theme-light / .glyn-theme-dark on <html>; the dark palette is the default so the
+ * chrome is never unstyled during the first paint.
+ */
+:root {
+  --nf-row-hover: rgba(255, 255, 255, 0.08);
+  --nf-row-drop: rgba(255, 255, 255, 0.16);
+  --nf-outline: rgba(255, 255, 255, 0.22);
+  --nf-marker: rgba(255, 255, 255, 0.28);
+  --nf-menu-bg: #353535;
+  --nf-menu-fg: #ffffff;
+  --nf-menu-hover: rgba(255, 255, 255, 0.10);
+  --nf-menu-divider: rgba(255, 255, 255, 0.08);
+  --nf-menu-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  --nf-dialog-bg: #212121;
+  --nf-dialog-fg: #ffffff;
+  --nf-dialog-muted: rgba(255, 255, 255, 0.85);
+  --nf-dialog-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  --nf-cancel-bg: #2f2f2f;
+  --nf-cancel-border: rgba(255, 255, 255, 0.15);
+  --nf-danger: #e02e2a;
+  --nf-danger-fg: #f97373;
+  --nf-stub-fg: rgba(255, 255, 255, 0.62);
+  --nf-resizer-bg: #101010;
+  --nf-resizer-grip: rgba(255, 255, 255, 0.12);
+}
+
+html.glyn-theme-light {
+  --nf-row-hover: rgba(0, 0, 0, 0.06);
+  --nf-row-drop: rgba(0, 0, 0, 0.12);
+  --nf-outline: rgba(0, 0, 0, 0.22);
+  --nf-marker: rgba(0, 0, 0, 0.28);
+  --nf-menu-bg: #ffffff;
+  --nf-menu-fg: #1f1f1f;
+  --nf-menu-hover: rgba(0, 0, 0, 0.06);
+  --nf-menu-divider: rgba(0, 0, 0, 0.10);
+  --nf-menu-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+  --nf-dialog-bg: #ffffff;
+  --nf-dialog-fg: #1f1f1f;
+  --nf-dialog-muted: rgba(0, 0, 0, 0.70);
+  --nf-dialog-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  --nf-cancel-bg: #f2f2f0;
+  --nf-cancel-border: rgba(0, 0, 0, 0.15);
+  --nf-danger: #c8322e;
+  --nf-danger-fg: #c8322e;
+  --nf-stub-fg: rgba(0, 0, 0, 0.58);
+  --nf-resizer-bg: #e8e8e6;
+  --nf-resizer-grip: rgba(0, 0, 0, 0.18);
+}
 /* Show 3-dot button only on hover/focus */
 .glyn-folder-row .__menu-item-trailing-btn {
   opacity: 0;
@@ -16,7 +68,12 @@
 }
 
 .glyn-folder-row:hover {
-  background: #2f2f2f;
+  background: var(--nf-row-hover);
+}
+
+/* Applied while a chat or folder is hovering this row as a drop destination. */
+.glyn-folder-row-drop-target {
+  background: var(--nf-row-drop);
 }
 
 .glyn-folder-wrapper {
@@ -42,7 +99,7 @@ html.glyn-drag-active .glyn-folder-hover-band {
 
 /* Inline rename styling */
 .glyn-folder-label-editing {
-  outline: 1px solid rgba(255, 255, 255, 0.35);
+  outline: 1px solid var(--nf-outline);
   border-radius: 4px;
   padding: 0 2px;
 }
@@ -52,12 +109,12 @@ html.glyn-drag-active .glyn-folder-hover-band {
   position: fixed;
   z-index: 9999;
   min-width: 180px;
-  background: #353535;
+  background: var(--nf-menu-bg);
   border-radius: 12px;
   padding: 6px 0;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--nf-menu-shadow);
   font-size: 14px;
-  color: white;
+  color: var(--nf-menu-fg);
 }
 
 /* Menu buttons */
@@ -84,7 +141,7 @@ html.glyn-drag-active .glyn-folder-hover-band {
 }
 
 .glyn-folder-menu-color-row:hover {
-  background: rgba(255, 255, 255, 0.07);
+  background: var(--nf-menu-hover);
 }
 
 /* Make the input fill the whole row */
@@ -102,18 +159,18 @@ html.glyn-drag-active .glyn-folder-hover-band {
 
 /* Delete colour */
 .glyn-folder-menu button[data-action="delete"] {
-  color: #f97373;
+  color: var(--nf-danger-fg);
 }
 
 /* Hover background */
 .glyn-folder-menu button[data-action]:hover {
-  background: #4a4a4a;
+  background: var(--nf-menu-hover);
 }
 
 /* Divider */
 .glyn-folder-menu hr {
   border: 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--nf-menu-divider);
   margin: 6px 0;
 }
 
@@ -142,13 +199,13 @@ html.glyn-drag-active .glyn-folder-hover-band {
 }
 
 .glyn-folder-confirm-dialog {
-  background: #212121;
-  color: #fff;
+  background: var(--nf-dialog-bg);
+  color: var(--nf-dialog-fg);
   border-radius: 1rem;
   max-width: 450px;
   width: 100%;
   padding: 24px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--nf-dialog-shadow);
 }
 
 .glyn-folder-confirm-body {
@@ -165,7 +222,7 @@ html.glyn-drag-active .glyn-folder-hover-band {
 .glyn-folder-confirm-name {
   margin-top: 12px;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--nf-dialog-muted);
 }
 
 .glyn-folder-confirm-actions {
@@ -184,15 +241,15 @@ html.glyn-drag-active .glyn-folder-hover-band {
 }
 
 .glyn-folder-confirm-actions button[data-role="delete"] {
-  background: #e02e2a;
+  background: var(--nf-danger);
   color: #fff;
-  border-color: #e02e2a;
+  border-color: var(--nf-danger);
 }
 
 .glyn-folder-confirm-actions button[data-role="cancel"] {
-  background: #2f2f2f;
-  color: #fff;
-  border-color: #ffffff26;
+  background: var(--nf-cancel-bg);
+  color: var(--nf-dialog-fg);
+  border-color: var(--nf-cancel-border);
 }
 
 #glyn-sidebar-resizer {
@@ -205,7 +262,7 @@ html.glyn-drag-active .glyn-folder-hover-band {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #101010;
+  background: var(--nf-resizer-bg);
   border-radius: 8px;
   z-index: 5;
 }
@@ -216,7 +273,7 @@ html.glyn-drag-active .glyn-folder-hover-band {
   width: 6px;
   height: 48px;
   border-radius: 999px;
-  background: radial-gradient(circle, rgba(255, 255, 255, 0.12) 40%, transparent 55%) 0 0 / 6px 10px repeat-y;
+  background: radial-gradient(circle, var(--nf-resizer-grip) 40%, transparent 55%) 0 0 / 6px 10px repeat-y;
   opacity: 0.8;
 }
 
@@ -234,12 +291,62 @@ html:not(.glyn-sidebar-handle-visible) #glyn-sidebar-resizer::after {
   display: none;
 }
 
-.glyn-chat-placeholder {
-  padding: 6px 10px;
-  margin: 4px 6px;
-  border: 1px dashed rgba(255, 255, 255, 0.18);
+/* Drop position indicator shown between rows while dragging. */
+#glyn-drop-marker {
+  height: 20px;
+  margin: 4px 0 4px 6px;
+  background: transparent;
+  border: 1px dashed var(--nf-marker);
   border-radius: 8px;
-  font-size: 0.85rem;
-  color: rgba(255, 255, 255, 0.65);
-  background: rgba(255, 255, 255, 0.05);
+  box-sizing: border-box;
+}
+
+/*
+ * Stub row for a filed chat the host app is not currently listing (Claude shows only recent
+ * conversations). It is a real link, so the chat stays one click away.
+ */
+.glyn-chat-stub {
+  margin: 1px 0;
+}
+
+.glyn-chat-stub-link {
+  display: block;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  line-height: 1.3;
+  color: var(--nf-stub-fg);
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glyn-chat-stub-link:hover {
+  background: var(--nf-row-hover);
+}
+
+/*
+ * Host-specific fixups. The folder row borrows ChatGPT's own trailing-button class so it
+ * inherits that app's styling for free; Claude has no equivalent, so give the button an
+ * explicit neutral look there rather than restyling it for both apps.
+ */
+html.glyn-site-claude .glyn-folder-row {
+  font-size: 0.875rem;
+}
+
+html.glyn-site-claude .glyn-folder-row .glyn-folder-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+html.glyn-site-claude .glyn-folder-row .glyn-folder-menu-btn:hover {
+  background: var(--nf-row-drop);
 }
