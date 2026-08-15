@@ -14,10 +14,13 @@
     const TITLE_MAX_LENGTH = 120;
 
     class LayoutState {
-        constructor(storageService, folderManager, historyManager) {
+        constructor(storageService, folderManager, historyManager, options) {
             this.storage = storageService;
             this.folderManager = folderManager;
             this.historyManager = historyManager;
+            // Empty for the sidebar tree (so pre-existing keys stay readable); "p:<id>:" for a
+            // project's own tree. See SiteAdapter#projectKeyPrefix.
+            this.keyPrefix = (options && options.keyPrefix) || "";
             this.isRestoring = false;
             this._saveTimer = null;
             this._knownFolderIds = new Set();
@@ -299,8 +302,19 @@
             return true;
         }
 
+        /**
+         * Stop writing. A project's chat list disappears whenever the host app collapses or
+         * re-renders it; the stored layout must outlive that, so a torn-down tree must never
+         * get the chance to save the empty DOM it has been left with.
+         */
+        dispose() {
+            this.disposed = true;
+            clearTimeout(this._saveTimer);
+            this._saveTimer = null;
+        }
+
         async save() {
-            if (!this.storage) return false;
+            if (!this.storage || this.disposed) return false;
             const snapshot = this._buildSnapshot();
             const setObj = {};
             const removals = [];
@@ -415,7 +429,7 @@
         }
 
         markDirty(options) {
-            if (this.isRestoring) return;
+            if (this.isRestoring || this.disposed) return;
             const immediate = options && options.immediate;
             clearTimeout(this._saveTimer);
             if (immediate) {
@@ -462,7 +476,7 @@
         }
 
         _folderKey(id) {
-            return site.storageKey(`${FOLDER_PREFIX}${id}`);
+            return site.storageKey(`${this.keyPrefix}${FOLDER_PREFIX}${id}`);
         }
 
         _metaKeyFor(id) {

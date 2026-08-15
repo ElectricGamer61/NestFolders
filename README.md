@@ -13,6 +13,8 @@ not a workflow.
 
 - 🗂️ **Unlimited nesting** — folders inside folders inside folders, as deep as your projects go.
 - 🧲 **Drag and drop** — drag conversations into folders, reorder them, and move folders around.
+- 📁 **Folders inside a ChatGPT Project** — a project's own chat list gets its own folder tree,
+  kept separate from your main sidebar and from every other project.
 - 🎨 **Colour and rename** — inline rename plus a colour picker per folder.
 - 📌 **Folders pinned at the top** — instant access; your chats keep their native order below.
 - 🌗 **Follows the host theme** — folder chrome matches ChatGPT's and Claude's light or dark mode.
@@ -22,14 +24,19 @@ not a workflow.
 
 ## Supported apps
 
-| App | URL | Status |
-| --- | --- | --- |
-| ChatGPT | `https://chatgpt.com/*` | Full support (inherited from the upstream project) |
-| Claude | `https://claude.ai/*` | Full support (new in NestFolders) |
+| App | URL | Chat sidebar | Project chat lists |
+| --- | --- | --- | --- |
+| ChatGPT | `https://chatgpt.com/*` | Full support (inherited from the upstream project) | Full support |
+| Claude | `https://claude.ai/*` | Full support (new in NestFolders) | Not supported — see Limitations |
 
-**ChatGPT and Claude folders are kept separate.** Each app has its own folder tree stored under
-its own key namespace, so a chat can never end up in the wrong app's folder and one app's
-layout cannot overwrite the other's. A single export file contains both.
+**Every chat list keeps its own folders.** Each app, and each ChatGPT project within it, has its
+own folder tree under its own storage key namespace (`f0…` for the ChatGPT sidebar, `cl:f0…` for
+Claude, `p:g-p-<projectId>:f0…` for a project), so a chat can never end up in the wrong list's
+folder and one tree cannot overwrite another. A single export file contains all of them.
+
+Because a chat belongs to exactly one list, a chat cannot be dragged from the main sidebar into
+a project's folder (or the other way round) — that would file it in a project it is not part of.
+Move it between projects with ChatGPT's own controls first; its folders follow the list it is in.
 
 ## Install (Chrome / Chromium, developer mode)
 
@@ -77,23 +84,38 @@ extension popup. See [PRIVACY.md](PRIVACY.md) for the full policy.
 - **Chats not listed by the app appear as stub rows.** They are real links to the conversation,
   shown with the title captured when the chat was last visible.
 - **`chrome.storage.sync` has quotas.** Very large folder trees are chunked across keys, but a
-  few thousand filed chats is the practical ceiling.
-- **Claude Projects are not folders.** NestFolders organises conversations; it does not read or
-  modify Claude Projects or ChatGPT Projects.
+  few thousand filed chats is the practical ceiling. Each project with folders adds keys of its
+  own, so a very large number of foldered projects eats into the same budget.
+- **Projects are containers, not folders.** NestFolders organises the conversations *inside* a
+  project's chat list; it never creates, renames, deletes or reorders the projects themselves,
+  and never moves a chat between projects. Filing a chat in a folder is a purely local
+  rearrangement — ChatGPT still considers it a chat in that project.
+- **Claude Projects are not covered.** Claude's project chats are plain `/chat/<uuid>` links with
+  nothing in the row or its URL naming the project, so a project's chat list cannot be told apart
+  from the sidebar's recents the way ChatGPT's can (whose chats are `/g/g-p-<id>/c/<uuid>`).
+  Claude's main sidebar is fully supported; its project view is untouched. Covering it needs a
+  different anchor — most likely the project route in the URL plus a structural scan of the
+  project page — and that is still open.
+- **ChatGPT projects only get a starter folder where you are looking.** Opening a project seeds
+  one empty "New Folder" in its chat list so there is something to drag onto; projects you have
+  not opened are left alone until they have folders of their own.
 
 ## Development
 
 ```bash
 npm install     # dev dependency: jsdom
 npm test        # folder/layout/storage suite, run against the real content scripts
-node test/browser-smoke.js --screenshot shot.png   # loads the extension in real Chromium
+node test/browser-smoke.js --screenshot shot.png      # Claude sidebar, in real Chromium
+node test/project-smoke.js --screenshots ./out        # ChatGPT project folders, in real Chromium
 ```
 
 `npm test` boots the actual content scripts in jsdom against fixtures shaped like each app's
-sidebar, and covers container detection, nesting, drag-drop outcomes, persistence, per-app
-storage separation, and export/import. `test/browser-smoke.js` goes further and loads the
-unpacked extension into a headless Chromium, serving a synthetic page from the `claude.ai`
-origin so injection, layout and theming are exercised for real. Neither can validate the *live*
+sidebar — including current ChatGPT markup with a project expando — and covers container
+detection, nesting, drag-drop outcomes, persistence, per-list storage separation, and
+export/import. The two smoke tests go further and load the unpacked extension into a headless
+Chromium, serving a synthetic page from the host's own origin so injection, layout and theming
+are exercised for real; `project-smoke.js` also performs a genuine drag with dispatched
+`DragEvent`s and writes desktop and mobile screenshots. None of them can validate the *live*
 markup of ChatGPT or Claude — for that, see the manual checklist below.
 
 ### Manual checklist (needs a signed-in browser)
@@ -110,11 +132,26 @@ For each of ChatGPT and Claude:
 8. Start a new chat and confirm it appears in the list and can be dragged.
 9. Export from the popup, clear storage, re-import, and confirm both apps' folders return.
 
+On ChatGPT, additionally:
+
+10. Open a project. A folder appears at the top of that project's chat list, indented in line
+    with the project's own chats.
+11. Drag one of the project's chats into it, reload, and confirm it is still there.
+12. Confirm the main sidebar's folders are unchanged, and that the same folder does **not**
+    appear in another project.
+13. Collapse the project and expand it again; the folder and its chat come back.
+
 ### Architecture
 
 Everything host-specific — selectors, the chat-row shape, URL format, storage namespace — lives
 in `App/siteAdapter.js`. The folder model, drag controller and persistence layer are shared and
 know nothing about either app. Adding a third app means adding one adapter definition.
+
+A page can hold more than one chat list. `main.js` builds one *scope* per list — the sidebar's,
+plus one per project chat list the adapter finds — each with its own folder tree, history order,
+drag controller and storage prefix, all from the same shared classes. Detection is structural:
+a project's chat list is found by grouping chat links by the project id in their own href and
+then picking the element whose children are those rows, so it does not depend on layout classes.
 
 ## Credits
 

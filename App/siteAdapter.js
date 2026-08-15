@@ -5,11 +5,13 @@
     // selectors live here and nowhere else. Everything downstream (folders, drag, layout, storage)
     // talks to `GlynGPT.site` and never to a raw site selector.
     //
-    // Two concepts matter:
+    // Three concepts matter:
     //   * chat link - the <a href="/c/..."> (ChatGPT) or <a href="/chat/..."> (Claude) element.
-    //   * chat row  - the element we actually move around the tree. On ChatGPT the link *is* the
-    //                 row; on Claude the link is wrapped in list markup, so the row is the
-    //                 outer wrapper that is a direct child of the chat list container.
+    //   * chat row  - the element we actually move around the tree; the element that sits
+    //                 directly inside a row container. Depending on the host's markup that is
+    //                 either the link itself or the list wrapper around it.
+    //   * row container - an element whose *children* are chat rows. There is one per folder
+    //                 tree: the main sidebar chat list, plus one per project chat list.
     const ns = (window.GlynGPT = window.GlynGPT || {});
 
     const FOLDER_CONTENTS_ATTR = "data-glyn-folder-contents";
@@ -17,6 +19,9 @@
     // Our own stand-in row for a filed chat the host app is not currently rendering.
     const CHAT_STUB_CLASS = "glyn-chat-stub";
     const CHAT_STUB_LINK_SELECTOR = ".glyn-chat-stub-link";
+    // Stamped on a project's chat list so a re-scan can recognise a list we already adopted
+    // even when every one of its chats has been filed into a folder.
+    const PROJECT_SCOPE_ATTR = "data-glyn-project-scope";
 
     const DEFINITIONS = {
         chatgpt: {
@@ -26,7 +31,28 @@
             // Empty prefix keeps pre-existing ChatGPT Folders data readable after the rebrand.
             storagePrefix: "",
             chatPathPrefix: "/c/",
-            chatLinkSelector: 'a.__menu-item[href^="/c/"], a.__menu-item[href*="/c/"]',
+            // `data-sidebar-item` is ChatGPT's own marker for a sidebar row; `__menu-item` is
+            // the older hook. Either identifies a conversation link, in the main history or in
+            // a project's chat list (whose hrefs are /g/g-p-<id>/c/<uuid>).
+            chatLinkSelector:
+                'a.__menu-item[href*="/c/"], a[data-sidebar-item="true"][href*="/c/"]',
+            // Chats that belong to a project carry the project id in their own href, which is
+            // what lets a project's chat list be recognised without depending on layout
+            // classes. See `findProjectChatLists`.
+            projects: {
+                label: "project",
+                chatLinkSelector:
+                    'a.__menu-item[href*="/g/g-p-"][href*="/c/"], a[data-sidebar-item="true"][href*="/g/g-p-"][href*="/c/"]',
+                // /g/g-p-<hex>-<slug>/project (sidebar link) and /g/g-p-<hex>/c/<uuid> (chat)
+                // must resolve to the same id, so the slug is dropped.
+                idFromPath(path) {
+                    const match = /^\/g\/(g-p-[^/]+)(?:\/|$)/.exec(path || "");
+                    if (!match) return null;
+                    const segment = match[1];
+                    const rest = segment.slice("g-p-".length).split("-")[0];
+                    return rest ? `g-p-${rest}` : null;
+                }
+            },
             sidebarRootSelectors: [
                 'nav[aria-label="Chat history"]',
                 '[data-testid="left-sidebar"]',
@@ -55,6 +81,11 @@
             storagePrefix: "cl:",
             chatPathPrefix: "/chat/",
             chatLinkSelector: 'a[href^="/chat/"]',
+            // Claude's project chats are plain /chat/<uuid> links: nothing in the row or its
+            // href says which project it belongs to, so a project's chat list cannot be told
+            // apart from the sidebar's recents the way ChatGPT's can. Left unsupported rather
+            // than guessed at; see README's Limitations.
+            projects: null,
             sidebarRootSelectors: [
                 '[data-testid="menu-sidebar"]',
                 'nav[aria-label="Sidebar"]',
@@ -97,22 +128,42 @@
         return isElement(node) && typeof node.hasAttribute === "function" && node.hasAttribute(FOLDER_CONTENTS_ATTR);
     }
 
+    function isListElement(node) {
+        if (!isElement(node)) return false;
+        const tag = (node.tagName || "").toLowerCase();
+        return tag === "ul" || tag === "ol";
+    }
+
     /**
      * Pick the element that holds the chat list, without relying on class names.
      *
      * For every ancestor of a chat link we count how many of its *direct children* contain at
      * least one chat link. A list container scores once per row (high); a section wrapper that
-     * merely groups two lists scores 2. The highest score wins, deepest node breaking ties.
+     * merely groups two lists scores 2. The highest score wins.
+     *
+     * A single-chat list scores 1 everywhere up the tree, so ties fall back to preferring a
+     * real list element (<ul>/<ol>) and then the deepest node - without that, the row's own
+     * wrapper would be mistaken for the list that holds it.
      */
     function findChatListContainer(root, selector) {
         if (!root || typeof root.querySelectorAll !== "function") return null;
-        const links = Array.from(root.querySelectorAll(selector));
-        if (!links.length) return null;
+        return findChatListContainerFromLinks(Array.from(root.querySelectorAll(selector)), root);
+    }
 
+    /**
+     * Scoring counts only the links it was handed, never every chat link on the page. That is
+     * what keeps one project's list from being resolved to the container that happens to hold
+     * *all* the projects: that outer container holds more chat links, but only one of the
+     * links belonging to the project being placed.
+     */
+    function findChatListContainerFromLinks(links, root) {
+        if (!links || !links.length) return null;
+
+        const stopAt = root ? root.parentElement : null;
         const candidates = new Set();
         links.forEach((link) => {
             let node = link.parentElement;
-            while (node && node !== root.parentElement) {
+            while (node && node !== stopAt) {
                 if (!isFolderWrapper(node) && !isFolderContents(node)) {
                     candidates.add(node);
                 }
@@ -123,20 +174,26 @@
 
         let best = null;
         let bestScore = 0;
+        let bestIsList = false;
         let bestDepth = -1;
         candidates.forEach((candidate) => {
             let score = 0;
             Array.from(candidate.children).forEach((child) => {
                 if (isFolderWrapper(child)) return;
-                if (child.matches(selector) || child.querySelector(selector)) {
+                if (links.some((link) => link === child || child.contains(link))) {
                     score += 1;
                 }
             });
             if (!score) return;
+            const isList = isListElement(candidate);
             const depth = depthOf(candidate);
-            if (score > bestScore || (score === bestScore && depth > bestDepth)) {
+            const better = score > bestScore ||
+                (score === bestScore && isList && !bestIsList) ||
+                (score === bestScore && isList === bestIsList && depth > bestDepth);
+            if (better) {
                 best = candidate;
                 bestScore = score;
+                bestIsList = isList;
                 bestDepth = depth;
             }
         });
@@ -157,16 +214,36 @@
         constructor(definition) {
             Object.assign(this, definition);
             this.historyDiv = null;
+            // Every adopted chat list: the sidebar's, plus one per project chat list.
+            this.rowContainers = new Set();
         }
 
         setHistoryContainer(el) {
+            if (this.historyDiv) {
+                this.rowContainers.delete(this.historyDiv);
+            }
             this.historyDiv = el || null;
+            if (el) {
+                this.rowContainers.add(el);
+            }
         }
 
-        /** Containers that may hold chat rows: the root chat list and every folder body. */
+        registerRowContainer(el) {
+            if (isElement(el)) {
+                this.rowContainers.add(el);
+            }
+        }
+
+        unregisterRowContainer(el) {
+            if (el && el !== this.historyDiv) {
+                this.rowContainers.delete(el);
+            }
+        }
+
+        /** Containers that may hold chat rows: every adopted chat list and every folder body. */
         isRowContainer(node) {
             if (!isElement(node)) return false;
-            return node === this.historyDiv || isFolderContents(node);
+            return node === this.historyDiv || this.rowContainers.has(node) || isFolderContents(node);
         }
 
         findSidebarRoot() {
@@ -182,7 +259,11 @@
             for (const selector of this.historySelectors) {
                 const el = document.querySelector(selector);
                 if (el && el.querySelector(this.chatLinkSelector)) {
-                    return el;
+                    // A named element (e.g. ChatGPT's #history) says *where* the list is, not
+                    // that it is the element whose children are the rows: current ChatGPT wraps
+                    // the rows in `#history > ul > li`. Descend to the element that actually
+                    // holds the rows, which is #history itself on the older flat markup.
+                    return findChatListContainer(el, this.chatLinkSelector) || el;
                 }
             }
             const root = this.findSidebarRoot();
@@ -208,6 +289,81 @@
             }
             const root = this.findSidebarRoot();
             return root || start.parentElement || start;
+        }
+
+        // ---- projects -------------------------------------------------------------------
+        //
+        // A project's chat list is a second, independent chat list on the same page. It gets
+        // its own folder tree, keyed by project id, and is otherwise driven by exactly the
+        // same row/folder/drag machinery as the sidebar list.
+
+        supportsProjectFolders() {
+            return !!(this.projects && this.projects.chatLinkSelector);
+        }
+
+        /** "g-p-<hex>" for any project path or project-scoped chat path, else null. */
+        projectIdFromHref(rawHref) {
+            if (!this.supportsProjectFolders() || typeof this.projects.idFromPath !== "function") {
+                return null;
+            }
+            return this.projects.idFromPath(this.normalizeHref(rawHref));
+        }
+
+        /** The project whose page is currently open, or null. */
+        currentProjectId() {
+            return this.projectIdFromHref(window.location ? window.location.pathname : "");
+        }
+
+        markProjectContainer(el, projectId) {
+            if (isElement(el) && projectId && typeof el.setAttribute === "function") {
+                // Guarded: this runs from a mutation observer, and writing an attribute queues
+                // a record even when the value is unchanged.
+                if (el.getAttribute(PROJECT_SCOPE_ATTR) !== projectId) {
+                    el.setAttribute(PROJECT_SCOPE_ATTR, projectId);
+                }
+            }
+        }
+
+        /**
+         * Every project chat list currently rendered, as `{ projectId, container }`.
+         *
+         * Grouping is by the project id carried in each chat's own href, so the result does not
+         * depend on any layout class. Lists we have already adopted are recognised by their
+         * marker attribute as well, so a project whose every chat has been filed into a folder
+         * does not look like it has no chat list.
+         */
+        findProjectChatLists() {
+            if (!this.supportsProjectFolders()) return [];
+
+            const byId = new Map();
+            const remember = (projectId, container) => {
+                if (!projectId || !container) return;
+                if (this.historyDiv && (container === this.historyDiv || this.historyDiv.contains(container))) {
+                    return;
+                }
+                if (!byId.has(projectId)) {
+                    byId.set(projectId, container);
+                }
+            };
+
+            Array.from(document.querySelectorAll(`[${PROJECT_SCOPE_ATTR}]`)).forEach((el) => {
+                remember(el.getAttribute(PROJECT_SCOPE_ATTR), el);
+            });
+
+            const groups = new Map();
+            Array.from(document.querySelectorAll(this.projects.chatLinkSelector)).forEach((link) => {
+                if (link.closest(`.${FOLDER_WRAPPER_CLASS}`)) return;
+                if (this.historyDiv && this.historyDiv.contains(link)) return;
+                const projectId = this.projectIdFromHref(link.getAttribute("href"));
+                if (!projectId || byId.has(projectId)) return;
+                if (!groups.has(projectId)) groups.set(projectId, []);
+                groups.get(projectId).push(link);
+            });
+            groups.forEach((links, projectId) => {
+                remember(projectId, findChatListContainerFromLinks(links, null));
+            });
+
+            return Array.from(byId, ([projectId, container]) => ({ projectId, container }));
         }
 
         /** Every chat row inside `scope` (rows, not links). */
@@ -320,6 +476,15 @@
         storageKey(key) {
             return `${this.storagePrefix}${key}`;
         }
+
+        /**
+         * Second namespace level, so one project's folders collide neither with the main
+         * sidebar's nor with another project's. Keys read `p:<projectId>:f0` (`cl:p:...` on
+         * Claude, were it ever supported), leaving the sidebar's existing keys untouched.
+         */
+        projectKeyPrefix(projectId) {
+            return projectId ? `p:${projectId}:` : "";
+        }
     }
 
     function resolveSite(hostname) {
@@ -334,5 +499,6 @@
     ns.SITE_DEFINITIONS = DEFINITIONS;
     ns.resolveSite = resolveSite;
     ns.findChatListContainer = findChatListContainer;
+    ns.PROJECT_SCOPE_ATTR = PROJECT_SCOPE_ATTR;
     ns.site = resolveSite(window.location && window.location.hostname);
 })();
