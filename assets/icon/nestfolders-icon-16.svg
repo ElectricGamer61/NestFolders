@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
+  <!-- Hand-hinted 16px variant of the NestFolders mark: flat fills, whole/half-pixel edges,
+       and only two folder layers so the stack still reads in the toolbar. -->
+  <rect x="0" y="0" width="16" height="16" rx="3.5" fill="#20244A"/>
+  <rect x="5" y="2.5" width="6" height="1.5" rx="0.75" fill="#F2AE68"/>
+  <g fill="#E8654B">
+    <rect x="2.5" y="5" width="5.5" height="3" rx="1"/>
+    <rect x="2.5" y="6.5" width="11" height="7" rx="1.5"/>
+  </g>
+</svg>

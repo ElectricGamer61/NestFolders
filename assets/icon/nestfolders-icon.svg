@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- NestFolders mark: a stack of nested folder layers on a deep navy tile.
+       Geometry is laid out on a 128 grid = the 16px grid x8, so every size stays aligned. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#272C58"/>
+      <stop offset="1" stop-color="#171A36"/>
+    </linearGradient>
+    <linearGradient id="front" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F4805F"/>
+      <stop offset="1" stop-color="#DC5744"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="128" height="128" rx="28" fill="url(#tile)"/>
+
+  <!-- back layer (smallest, deepest nesting) -->
+  <rect x="54" y="18" width="36" height="10" rx="5" fill="#F7D28C"/>
+  <!-- middle layer -->
+  <rect x="42" y="32" width="60" height="12" rx="6" fill="#EFA562"/>
+
+  <!-- front folder: tab + body, unioned as two rounded rects -->
+  <g fill="url(#front)">
+    <rect x="18" y="48" width="48" height="22" rx="8"/>
+    <rect x="18" y="60" width="92" height="46" rx="10"/>
+  </g>
+</svg>
