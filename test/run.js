@@ -297,6 +297,190 @@ test("deleting a folder returns its chats to the root list", async () => {
     window.close();
 });
 
+// ---------------------------------------------------------------- current ChatGPT markup
+
+// Transcribed from a signed-in ChatGPT sidebar: rows live in `#history > ul > li`, projects are
+// expandos, and a project's chats carry the project id in their own href.
+const PROJECT_ID = "g-p-68ee40f272548191b206b8f939a83182";
+const OTHER_PROJECT_ID = "g-p-6a1eaf720f50819183099558b0906b93";
+const ROBLOX = {
+    id: PROJECT_ID,
+    slug: "roblox-dev",
+    name: "Roblox dev",
+    chats: [
+        { href: `/g/${PROJECT_ID}/c/p-111`, title: "Datastore design" },
+        { href: `/g/${PROJECT_ID}/c/p-222`, title: "NPC pathfinding" },
+        { href: `/g/${PROJECT_ID}/c/p-333`, title: "Rojo setup" }
+    ]
+};
+const FINANCE = {
+    id: OTHER_PROJECT_ID,
+    slug: "finanse",
+    name: "Finance",
+    chats: [{ href: `/g/${OTHER_PROJECT_ID}/c/q-111`, title: "Budget model" }]
+};
+const projectUrl = (project) => `https://chatgpt.com/g/${project.id}-${project.slug}/project`;
+const projectScope = (env, projectId) =>
+    env.ns.scopes.find((scope) => scope.projectId === projectId) || null;
+
+test("ChatGPT: the row is the list item, not the list that holds it", async () => {
+    const { ns, window, dom } = await loadExtension("chatgpt-modern", CHATGPT_CHATS, {});
+    const site = ns.site;
+    // #history says where the list is; the element whose children are rows is the <ul> inside.
+    assert.strictEqual(ns.historyDiv.tagName, "UL");
+    assert.strictEqual(ns.historyDiv.parentElement.id, "history");
+
+    const rows = site.childRows(ns.historyDiv);
+    assert.strictEqual(rows.length, 3, "one row per conversation, not one row for the whole list");
+    assert.strictEqual(rows[0].tagName, "LI");
+    assert.strictEqual(site.hrefOf(rows[0]), "/c/aaa");
+
+    const link = window.document.querySelector('a[href="/c/bbb"]');
+    assert.strictEqual(site.rowFromLink(link), link.closest("li"));
+    dom.window.close();
+});
+
+test("a chat list holding a single conversation still resolves to the list", async () => {
+    const { ns, dom } = await loadExtension("chatgpt-modern", [CHATGPT_CHATS[0]], {});
+    assert.strictEqual(ns.historyDiv.tagName, "UL");
+    assert.strictEqual(ns.site.childRows(ns.historyDiv).length, 1);
+    dom.window.close();
+});
+
+test("ChatGPT: each project's chat list gets its own folder tree", async () => {
+    const env = await loadExtension("chatgpt-modern", CHATGPT_CHATS, {}, {
+        projects: [ROBLOX, FINANCE],
+        url: projectUrl(ROBLOX)
+    });
+    const { ns, window } = env;
+
+    assert.ok(ns.site.supportsProjectFolders(), "ChatGPT supports project folders");
+    assert.strictEqual(ns.site.currentProjectId(), PROJECT_ID,
+        "the project id is read from the URL with the slug stripped");
+
+    const roblox = projectScope(env, PROJECT_ID);
+    const finance = projectScope(env, OTHER_PROJECT_ID);
+    assert.ok(roblox && finance, "both project chat lists are adopted");
+    assert.strictEqual(ns.scopes.length, 3, "sidebar + two projects");
+
+    // Each tree spans only its own list.
+    assert.strictEqual(ns.site.childRows(roblox.historyDiv).length, 3);
+    assert.strictEqual(ns.site.childRows(finance.historyDiv).length, 1);
+    assert.strictEqual(ns.site.childRows(ns.historyDiv).length, CHATGPT_CHATS.length,
+        "project chats never enter the sidebar's own list");
+    assert.ok(!roblox.historyDiv.contains(ns.historyDiv) && !ns.historyDiv.contains(roblox.historyDiv));
+
+    // Only the project being viewed is seeded with a starter folder.
+    assert.strictEqual(roblox.folderManager.folders.length, 1);
+    assert.strictEqual(finance.folderManager.folders.length, 0,
+        "a project you are not looking at is left untouched until it has stored folders");
+    window.close();
+});
+
+test("ChatGPT: a project chat drops into a project folder, persists and restores", async () => {
+    const store = {};
+    const fixture = { projects: [ROBLOX], url: projectUrl(ROBLOX) };
+    const env = await loadExtension("chatgpt-modern", CHATGPT_CHATS, store, fixture);
+    const scope = projectScope(env, PROJECT_ID);
+    await fileChatInNewFolder(env, "/c/aaa", "Sidebar work");
+
+    const folder = scope.folderManager.createFolder("Systems");
+    const row = env.ns.site.childRows(scope.historyDiv)
+        .find((el) => env.ns.site.hrefOf(el) === ROBLOX.chats[1].href);
+    assert.ok(row && row.__glynChatItem, "the project chat is wired for drag");
+    scope.dragController.handleDrop(row.__glynChatItem, folder, folder.el);
+    await scope.layoutState.save();
+    await settle(env.window);
+
+    assert.strictEqual(env.ns.site.hrefOf(folder.contentsEl.firstElementChild), ROBLOX.chats[1].href);
+    assert.strictEqual(env.ns.site.childRows(scope.historyDiv).length, ROBLOX.chats.length - 1);
+    env.window.close();
+
+    // Keys are namespaced per project, alongside - never on top of - the sidebar's.
+    const keys = Object.keys(store);
+    assert.ok(keys.some((key) => key.startsWith(`p:${PROJECT_ID}:f`)), `no project keys in ${keys}`);
+    assert.ok(keys.some((key) => /^f\d/.test(key)), "the sidebar keeps its own unprefixed keys");
+
+    const reloaded = await loadExtension("chatgpt-modern", CHATGPT_CHATS, store, fixture);
+    const restored = projectScope(reloaded, PROJECT_ID);
+    const systems = restored.folderManager.folders
+        .find((rec) => rec.folderItem.data.name === "Systems");
+    assert.ok(systems, "the project folder is restored");
+    const rows = reloaded.ns.site.childRows(systems.contentsEl);
+    assert.strictEqual(rows.length, 1);
+    assert.strictEqual(reloaded.ns.site.hrefOf(rows[0]), ROBLOX.chats[1].href);
+    reloaded.window.close();
+});
+
+test("project folders collide neither with the sidebar's nor with another project's", async () => {
+    const store = {};
+    const fixture = { projects: [ROBLOX, FINANCE], url: projectUrl(ROBLOX) };
+    const env = await loadExtension("chatgpt-modern", CHATGPT_CHATS, store, fixture);
+
+    env.ns.folderManager.createFolder("Sidebar work");
+    projectScope(env, PROJECT_ID).folderManager.createFolder("Roblox work");
+    const finance = projectScope(env, OTHER_PROJECT_ID);
+    finance.folderManager.createFolder("Finance work");
+    await Promise.all(env.ns.scopes.map((scope) => scope.layoutState.save()));
+    env.window.close();
+
+    const reloaded = await loadExtension("chatgpt-modern", CHATGPT_CHATS, store, fixture);
+    // Array.from re-homes the jsdom-realm array so deepStrictEqual compares values, not realms.
+    const names = (scope) =>
+        Array.from(scope.folderManager.folders, (rec) => rec.folderItem.data.name);
+    assert.deepStrictEqual(names(projectScope(reloaded, PROJECT_ID)).sort(),
+        ["New Folder", "Roblox work"]);
+    assert.deepStrictEqual(names(projectScope(reloaded, OTHER_PROJECT_ID)), ["Finance work"]);
+    assert.ok(names(reloaded.ns.scopes[0]).includes("Sidebar work"));
+    assert.ok(!names(reloaded.ns.scopes[0]).includes("Roblox work"),
+        "the sidebar must not show a project's folders");
+    reloaded.window.close();
+});
+
+test("a chat cannot be dragged from the sidebar into a project's folder", async () => {
+    const env = await loadExtension("chatgpt-modern", CHATGPT_CHATS, {}, {
+        projects: [ROBLOX],
+        url: projectUrl(ROBLOX)
+    });
+    const scope = projectScope(env, PROJECT_ID);
+    const folder = scope.folderManager.createFolder("Systems");
+    const sidebarRow = env.ns.site.childRows(env.ns.historyDiv)[0];
+
+    // Routed the way a real drop is, through the shared handler rather than one tree's controller.
+    env.ns.DraggableElement.dropHandler(sidebarRow.__glynChatItem, folder, folder.el);
+    await settle(env.window);
+
+    assert.strictEqual(folder.contentsEl.children.length, 0, "the cross-tree drop is ignored");
+    assert.ok(env.ns.site.childRows(env.ns.historyDiv).includes(sidebarRow),
+        "the chat stays in the sidebar list");
+    env.window.close();
+});
+
+test("a project chat list that the app removes takes its tree with it, not its stored layout", async () => {
+    const store = {};
+    const fixture = { projects: [ROBLOX], url: projectUrl(ROBLOX) };
+    const env = await loadExtension("chatgpt-modern", CHATGPT_CHATS, store, fixture);
+    const scope = projectScope(env, PROJECT_ID);
+    scope.folderManager.createFolder("Systems");
+    await scope.layoutState.save();
+    const saved = JSON.parse(JSON.stringify(store));
+
+    // Collapsing a project detaches its list; the layout must outlive it.
+    scope.historyDiv.parentNode.removeChild(scope.historyDiv);
+    await settle(env.window, 60, 25);
+    assert.strictEqual(projectScope(env, PROJECT_ID), null, "the tree is torn down");
+    assert.deepStrictEqual(store, saved, "a torn-down tree never writes over its own layout");
+    env.window.close();
+});
+
+test("Claude: project folders are not claimed", async () => {
+    const { ns, dom } = await loadExtension("claude", CLAUDE_CHATS, {});
+    assert.strictEqual(ns.site.supportsProjectFolders(), false);
+    assert.strictEqual(ns.site.findProjectChatLists().length, 0);
+    assert.strictEqual(ns.scopes.length, 1, "only the sidebar tree exists");
+    dom.window.close();
+});
+
 // ---------------------------------------------------------------- storage separation
 
 test("ChatGPT and Claude layouts share one storage area without colliding", async () => {
@@ -361,7 +545,8 @@ test("only folder structure, chat paths and titles are written to storage", asyn
     assert.ok(!serialised.includes("claude.ai"), "no absolute URLs are stored");
     const values = JSON.parse(serialised);
     Object.keys(values).forEach((key) => {
-        assert.ok(/^(cl:)?(f\d+|settings)/.test(key), `unexpected storage key ${key}`);
+        assert.ok(/^(cl:)?(p:g-p-[0-9a-f]+:)?(f\d+|settings)/.test(key),
+            `unexpected storage key ${key}`);
     });
 });
 

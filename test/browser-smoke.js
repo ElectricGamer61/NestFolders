@@ -13,12 +13,7 @@
  *   node test/browser-smoke.js [--chrome /path/to/chrome] [--screenshot out.png]
  */
 
-const { spawn, execSync } = require("child_process");
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-
-const APP_DIR = path.join(__dirname, "..", "App");
+const { launch, wait } = require("./chromium");
 
 const CLAUDE_FIXTURE = `<!doctype html>
 <html><head><title>Claude</title><style>
@@ -38,129 +33,26 @@ const CLAUDE_FIXTURE = `<!doctype html>
   </div>
 </body></html>`;
 
-function findChrome() {
-    const flagIndex = process.argv.indexOf("--chrome");
-    if (flagIndex !== -1 && process.argv[flagIndex + 1]) return process.argv[flagIndex + 1];
-    if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
-    for (const candidate of ["google-chrome", "chromium", "chromium-browser"]) {
-        try {
-            return execSync(`command -v ${candidate}`, { encoding: "utf8" }).trim();
-        } catch (_err) { /* keep looking */ }
-    }
-    const cache = path.join(os.homedir(), ".cache", "puppeteer", "chrome");
-    if (fs.existsSync(cache)) {
-        const builds = fs.readdirSync(cache).sort().reverse();
-        for (const build of builds) {
-            const bin = path.join(cache, build, "chrome-linux64", "chrome");
-            if (fs.existsSync(bin)) return bin;
-        }
-    }
-    return null;
-}
-
-class CDP {
-    constructor(url) {
-        this.socket = new WebSocket(url);
-        this.nextId = 1;
-        this.pending = new Map();
-        this.handlers = [];
-        this.ready = new Promise((resolve, reject) => {
-            this.socket.addEventListener("open", resolve);
-            this.socket.addEventListener("error", reject);
-        });
-        this.socket.addEventListener("message", (event) => {
-            const message = JSON.parse(event.data);
-            if (message.id && this.pending.has(message.id)) {
-                const { resolve, reject } = this.pending.get(message.id);
-                this.pending.delete(message.id);
-                message.error ? reject(new Error(JSON.stringify(message.error))) : resolve(message.result);
-                return;
-            }
-            this.handlers.forEach((handler) => handler(message));
-        });
-    }
-
-    on(handler) { this.handlers.push(handler); }
-
-    send(method, params, sessionId) {
-        const id = this.nextId++;
-        const payload = { id, method, params: params || {} };
-        if (sessionId) payload.sessionId = sessionId;
-        this.socket.send(JSON.stringify(payload));
-        return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
-    }
-
-    close() { this.socket.close(); }
-}
-
-const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 async function main() {
-    const chrome = findChrome();
-    if (!chrome) {
+    const browser = await launch();
+    if (!browser) {
         console.log("SKIP: no Chrome/Chromium binary found (pass --chrome <path> or set CHROME_PATH)");
         process.exit(0);
     }
 
-    const profile = fs.mkdtempSync(path.join(os.tmpdir(), "nestfolders-smoke-"));
-    const child = spawn(chrome, [
-        "--headless=new",
-        "--no-sandbox",
-        "--no-first-run",
-        "--disable-gpu",
-        `--user-data-dir=${profile}`,
-        `--load-extension=${APP_DIR}`,
-        `--disable-extensions-except=${APP_DIR}`,
-        "--remote-debugging-port=0",
-        "about:blank"
-    ], { stdio: ["ignore", "ignore", "pipe"] });
-
-    let stderr = "";
-    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-
-    const portFile = path.join(profile, "DevToolsActivePort");
-    let endpoint = null;
-    for (let i = 0; i < 100 && !endpoint; i += 1) {
-        await wait(100);
-        if (fs.existsSync(portFile)) {
-            const [port, route] = fs.readFileSync(portFile, "utf8").trim().split("\n");
-            endpoint = `ws://127.0.0.1:${port}${route}`;
-        }
-    }
-    if (!endpoint) throw new Error(`Chrome did not expose a DevTools endpoint.\n${stderr}`);
-
-    const client = new CDP(endpoint);
-    await client.ready;
-
-    const { targetId } = await client.send("Target.createTarget", { url: "about:blank" });
-    const { sessionId } = await client.send("Target.attachToTarget", { targetId, flatten: true });
-
-    // Serve the fixture for any claude.ai request so the content script matches for real.
-    await client.send("Fetch.enable", {
-        patterns: [{ urlPattern: "https://claude.ai/*", requestStage: "Request" }]
-    }, sessionId);
-    client.on((message) => {
-        if (message.method !== "Fetch.requestPaused") return;
-        client.send("Fetch.fulfillRequest", {
-            requestId: message.params.requestId,
-            responseCode: 200,
-            responseHeaders: [{ name: "Content-Type", value: "text/html; charset=utf-8" }],
-            body: Buffer.from(CLAUDE_FIXTURE).toString("base64")
-        }, message.sessionId).catch(() => {});
-    });
-
-    await client.send("Page.enable", {}, sessionId);
-    await client.send("Page.navigate", { url: "https://claude.ai/new" }, sessionId);
+    await browser.serve("https://claude.ai/*", CLAUDE_FIXTURE);
+    await browser.client.send("Page.enable", {}, browser.sessionId);
+    await browser.client.send("Page.navigate", { url: "https://claude.ai/new" }, browser.sessionId);
     await wait(4000);
 
-    const probe = `(() => {
+    // Content scripts run in an isolated world, so their globals are deliberately not
+    // reachable from here: everything below is observed through the page's own DOM.
+    const report = await browser.evaluate(`(() => {
         const wrappers = document.querySelectorAll(".glyn-folder-wrapper");
         const row = document.querySelector(".glyn-folder-row");
         const list = document.querySelector("ul.recents");
         const rowStyle = row ? getComputedStyle(row) : null;
-        // Content scripts run in an isolated world, so their globals are deliberately not
-        // reachable from here: everything below is observed through the page's own DOM.
-        return JSON.stringify({
+        return {
             folderCount: wrappers.length,
             folderLabel: row ? row.innerText.trim() : null,
             folderIsFirstInList: !!(list && list.firstElementChild &&
@@ -170,22 +62,17 @@ async function main() {
             rowVisible: !!(row && row.getBoundingClientRect().width > 50 &&
                 rowStyle.display !== "none" && rowStyle.visibility !== "hidden"),
             folderIconRendered: !!document.querySelector(".glyn-folder-icon svg")
-        });
-    })()`;
-    const { result } = await client.send("Runtime.evaluate", { expression: probe }, sessionId);
-    const report = JSON.parse(result.value);
+        };
+    })()`);
     console.log(JSON.stringify(report, null, 2));
 
     const shotIndex = process.argv.indexOf("--screenshot");
     if (shotIndex !== -1 && process.argv[shotIndex + 1]) {
-        const shot = await client.send("Page.captureScreenshot", { format: "png" }, sessionId);
-        fs.writeFileSync(process.argv[shotIndex + 1], Buffer.from(shot.data, "base64"));
+        await browser.screenshot(process.argv[shotIndex + 1]);
         console.log(`screenshot written to ${process.argv[shotIndex + 1]}`);
     }
 
-    client.close();
-    child.kill();
-    fs.rmSync(profile, { recursive: true, force: true });
+    browser.close();
 
     const failures = [];
     if (report.folderCount < 1) failures.push("content scripts did not render folder UI on claude.ai");

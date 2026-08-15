@@ -1,4 +1,10 @@
 // @meta main.js bootstraps the content script, wiring managers, drag logic, and storage sync.
+//
+// A page can host more than one chat list: the sidebar's, plus one per project chat list the
+// host app renders (ChatGPT only - see siteAdapter). Each list gets its own *scope*: its own
+// folder tree, history order, drag controller and storage namespace, all built from the same
+// shared classes. Everything below that is not per-list - settings, theming, the drop marker,
+// the sidebar resizer, the popup message channel - stays global.
 (function () {
     const ns = (window.GlynGPT = window.GlynGPT || {});
     const site = ns.site;
@@ -23,20 +29,18 @@
     const ENABLE_SAFE_REINIT = true;
     const DEFAULT_SHOW_SIDEBAR_HANDLE = true;
 
-    let historyDiv = null;
-    let historyManager = null;
-    let folderManager = null;
-    let folderMenu = null;
-    let dragController = null;
+    /** Every live folder tree. `scopes[0]` is always the sidebar's. */
+    const scopes = [];
+    let sidebarScope = null;
     let storageService = null;
     let globalSettings = null;
-    let layoutState = null;
+    // One menu element serves every tree; it resolves the tree from the folder it was opened on.
+    let folderMenu = null;
 
     let dropMarker = null;
     let highlightedFolderRow = null;
     window.FOLDER_ICON_STYLE = window.FOLDER_ICON_STYLE || "outline";
     let messageListenerBound = false;
-    let historyObserver = null;
     let containerMonitorTimer = null;
     let reinitPending = false;
     let safeModeActive = false;
@@ -48,17 +52,16 @@
     let themeMediaQuery = null;
     let themeMediaListener = null;
     let appliedTheme = null;
-    let historyScanScheduled = false;
 
-    function scheduleSave(opts) {
-        if (layoutState) {
-            layoutState.markDirty(opts || {});
+    function scheduleSave(scope, opts) {
+        if (scope && scope.layoutState) {
+            scope.layoutState.markDirty(opts || {});
         }
     }
 
     function findSidebarContainer() {
-        if (!historyDiv) return null;
-        return site.findSidebarContainer(historyDiv);
+        if (!sidebarScope) return null;
+        return site.findSidebarContainer(sidebarScope.historyDiv);
     }
 
     function applySidebarWidth(width) {
@@ -190,17 +193,22 @@
     }
 
     function enforceFoldersTopOrder() {
-        if (!folderManager || typeof folderManager.pinFoldersAtTop !== "function") return;
-        folderManager.pinFoldersAtTop();
+        scopes.forEach((scope) => {
+            if (scope.folderManager && typeof scope.folderManager.pinFoldersAtTop === "function") {
+                scope.folderManager.pinFoldersAtTop();
+            }
+        });
     }
 
-    function applyGlobalSettings(options) {
+    function applyGlobalSettings() {
         enforceFoldersTopOrder();
         const style = globalSettings ? globalSettings.getFolderIconStyle() : "outline";
         window.FOLDER_ICON_STYLE = style;
-        if (folderManager && typeof folderManager.refreshAllFolderIcons === "function") {
-            folderManager.refreshAllFolderIcons();
-        }
+        scopes.forEach((scope) => {
+            if (scope.folderManager && typeof scope.folderManager.refreshAllFolderIcons === "function") {
+                scope.folderManager.refreshAllFolderIcons();
+            }
+        });
         const showHandle = globalSettings
             ? globalSettings.getShowSidebarHandle()
             : DEFAULT_SHOW_SIDEBAR_HANDLE;
@@ -214,10 +222,6 @@
         }
     }
 
-    function findHistoryContainer() {
-        return site.findHistoryContainer();
-    }
-
     /**
      * Folder chrome is injected into a host app we do not control, so it has to follow the
      * host's light/dark theme. Rather than guessing at vendor theme classes, read the
@@ -226,7 +230,9 @@
     function refreshThemeClass() {
         const root = document.documentElement;
         if (!root) return;
-        const probe = sidebarContainer || historyDiv || document.body;
+        const probe = sidebarContainer ||
+            (sidebarScope && sidebarScope.historyDiv) ||
+            document.body;
         if (!probe) return;
         const next = isLightBackground(probe) ? "light" : "dark";
         // Writing a class attribute queues a mutation record even when the value is
@@ -302,18 +308,32 @@
         themeMediaListener = null;
     }
 
+    /**
+     * The tree the popup's "New folder" button should act on: the project you are looking at
+     * if it has a folder tree, otherwise the sidebar's.
+     */
+    function activeScope() {
+        const projectId = site.supportsProjectFolders() ? site.currentProjectId() : null;
+        if (projectId) {
+            const match = scopes.find((scope) => scope.projectId === projectId);
+            if (match) return match;
+        }
+        return sidebarScope;
+    }
+
     function ensureMessageListener() {
         if (messageListenerBound || !chrome || !chrome.runtime || !chrome.runtime.onMessage) return;
         chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             if (!message || !message.glynCommand) return;
             if (message.glynCommand === "createFolder") {
-                if (folderManager) {
-                    const folder = folderManager.createFolder("New Folder");
+                const scope = activeScope();
+                if (scope && scope.folderManager) {
+                    const folder = scope.folderManager.createFolder("New Folder");
                     if (folder && typeof folder.inlineRename === "function") {
                         folder.inlineRename();
                     }
                     if (folder) {
-                        scheduleSave({ immediate: true });
+                        scheduleSave(scope, { immediate: true });
                         if (sendResponse) sendResponse({ ok: true });
                     } else if (sendResponse) {
                         sendResponse({ ok: false, error: "folder-not-created" });
@@ -342,7 +362,7 @@
                 }
                 globalSettings.setValues(updates)
                     .then(() => {
-                        applyGlobalSettings({ persist: true });
+                        applyGlobalSettings();
                         if (sendResponse) sendResponse({ ok: true });
                     })
                     .catch(err => {
@@ -353,15 +373,12 @@
             }
             if (message.glynCommand === "expandAllFolders" || message.glynCommand === "collapseAllFolders") {
                 try {
-                    if (!folderManager || typeof folderManager.setAllFoldersExpanded !== "function") {
+                    if (!scopes.length) {
                         if (sendResponse) sendResponse({ ok: false, error: "not-ready" });
                         return true;
                     }
                     const expand = message.glynCommand === "expandAllFolders";
-                    const changed = folderManager.setAllFoldersExpanded(expand);
-                    if (changed) {
-                        scheduleSave({ immediate: true });
-                    }
+                    const changed = setAllFoldersExpanded(expand);
                     if (sendResponse) {
                         sendResponse({ ok: true, changed });
                     }
@@ -378,13 +395,27 @@
                     sendResponse({
                         ok: true,
                         settings: globalSettings ? globalSettings.getValues() : null,
-                        ready: !!folderManager
+                        ready: !!(sidebarScope && sidebarScope.folderManager)
                     });
                 }
                 return true;
             }
         });
         messageListenerBound = true;
+    }
+
+    function setAllFoldersExpanded(expand) {
+        let changed = false;
+        scopes.forEach((scope) => {
+            if (!scope.folderManager || typeof scope.folderManager.setAllFoldersExpanded !== "function") {
+                return;
+            }
+            if (scope.folderManager.setAllFoldersExpanded(expand)) {
+                changed = true;
+                scheduleSave(scope, { immediate: true });
+            }
+        });
+        return changed;
     }
 
     // ---- drop marker + highlight helpers ----
@@ -420,7 +451,7 @@
         const nextEl = dropMarker.nextElementSibling;
         let target = null;
         let beforeElementTarget = null;
-        const isRootContainer = container === historyDiv;
+        const isRootContainer = scopes.some((scope) => scope.historyDiv === container);
         if (nextEl) {
             if (nextEl.__glynChatItem) {
                 target = nextEl.__glynChatItem;
@@ -509,23 +540,24 @@
         }
     }
 
-    // ---- root chat helpers ----
+    // ---- scopes ----
 
-    function getRootChatLinks() {
-        if (!historyDiv) return [];
-        return site.childRows(historyDiv);
+    function scopeForNode(node) {
+        if (!node) return null;
+        return scopes.find((scope) =>
+            scope.historyDiv === node || scope.historyDiv.contains(node)) || null;
     }
 
-    function makeRootLinksDraggable() {
-        if (!historyDiv || !historyManager) return;
+    function makeRootLinksDraggable(scope) {
+        if (!scope.historyDiv || !scope.historyManager) return;
 
-        const rows = getRootChatLinks();
-        historyManager.ensureChatOrderFromLinks(rows);
+        const rows = site.childRows(scope.historyDiv);
+        scope.historyManager.ensureChatOrderFromLinks(rows);
 
         rows.forEach(row => {
             if (row.__glynChatItem) {
-                if (layoutState && typeof layoutState.tryHydrateChat === "function") {
-                    layoutState.tryHydrateChat(row.__glynChatItem);
+                if (scope.layoutState && typeof scope.layoutState.tryHydrateChat === "function") {
+                    scope.layoutState.tryHydrateChat(row.__glynChatItem);
                 }
                 return;
             }
@@ -534,38 +566,59 @@
             const item = new ChatItem(row, href, site.titleOf(row));
             row.__glynChatItem = item;
             item.enableDrag();
-            if (layoutState && typeof layoutState.tryHydrateChat === "function") {
-                layoutState.tryHydrateChat(item);
+            if (scope.layoutState && typeof scope.layoutState.tryHydrateChat === "function") {
+                scope.layoutState.tryHydrateChat(item);
             }
         });
     }
 
     /**
-     * Both host apps re-render their chat list as you navigate, lazy-load older chats, or
+     * Both host apps re-render their chat lists as you navigate, lazy-load older chats, or
      * rename a conversation. Re-scan on every mutation so new chats become draggable and our
      * folder wrappers survive the host's re-renders. The scan is coalesced into one animation
      * frame and every step it calls is idempotent, so it cannot feed itself indefinitely.
      */
-    function scanHistory() {
-        makeRootLinksDraggable();
-        if (folderManager) {
-            if (typeof folderManager.removeDuplicateWrappers === "function") {
-                folderManager.removeDuplicateWrappers();
-            }
-            if (typeof folderManager.ensureFolderMounts === "function") {
-                folderManager.ensureFolderMounts();
-            }
-        }
-        enforceFoldersTopOrder();
+    /**
+     * Match the host's own inset for rows in this project's list, so a folder lines up with the
+     * chats beside it. Measured from a live row instead of assumed, and only written when it
+     * actually changes.
+     */
+    function applyProjectIndent(scope) {
+        if (!scope.projectId || !scope.historyDiv) return;
+        const link = scope.historyDiv.querySelector(site.chatLinkSelector);
+        if (!link) return;
+        const style = window.getComputedStyle(link);
+        const inset = style.paddingInlineStart || style.paddingLeft;
+        if (!inset || inset === scope.indent) return;
+        scope.indent = inset;
+        scope.historyDiv.style.setProperty("--glyn-project-indent", inset);
     }
 
-    function scheduleHistoryScan() {
-        if (historyScanScheduled) return;
-        historyScanScheduled = true;
+    function scanHistory(scope) {
+        makeRootLinksDraggable(scope);
+        applyProjectIndent(scope);
+        if (scope.folderManager) {
+            if (typeof scope.folderManager.removeDuplicateWrappers === "function") {
+                scope.folderManager.removeDuplicateWrappers();
+            }
+            if (typeof scope.folderManager.ensureFolderMounts === "function") {
+                scope.folderManager.ensureFolderMounts();
+            }
+            scope.folderManager.pinFoldersAtTop();
+        }
+        if (scope.projectId) {
+            site.markProjectContainer(scope.historyDiv, scope.projectId);
+        }
+    }
+
+    function scheduleHistoryScan(scope) {
+        if (scope.scanScheduled || scope.disposed) return;
+        scope.scanScheduled = true;
         const run = () => {
-            historyScanScheduled = false;
-            if (!historyDiv || !document.contains(historyDiv)) return;
-            scanHistory();
+            scope.scanScheduled = false;
+            if (scope.disposed) return;
+            if (!scope.historyDiv || !document.contains(scope.historyDiv)) return;
+            scanHistory(scope);
         };
         if (typeof window.requestAnimationFrame === "function") {
             window.requestAnimationFrame(run);
@@ -574,31 +627,196 @@
         }
     }
 
-    function observeHistory() {
-        if (!historyDiv) return;
-        scanHistory();
+    function observeHistory(scope) {
+        if (!scope.historyDiv) return;
+        scanHistory(scope);
 
-        if (historyObserver) {
-            historyObserver.disconnect();
+        if (scope.observer) {
+            scope.observer.disconnect();
         }
-
-        historyObserver = new MutationObserver(scheduleHistoryScan);
-        historyObserver.observe(historyDiv, {
+        scope.observer = new MutationObserver(() => scheduleHistoryScan(scope));
+        scope.observer.observe(scope.historyDiv, {
             childList: true,
             subtree: false
         });
     }
 
-    function stopHistoryObserver() {
-        if (historyObserver) {
-            historyObserver.disconnect();
-            historyObserver = null;
+    function bindScopeChangeHandlers(scope) {
+        const immediateReasons = new Set([
+            "folder-rename",
+            "folder-color",
+            "folder-children",
+            "create-folder",
+            "delete-folder",
+            "move-folder",
+            "expand-all",
+            "collapse-all",
+            "ensure",
+            "move",
+            "remove",
+            "set-order"
+        ]);
+        const onStructureChange = (reason) => {
+            const immediate = immediateReasons.has(reason);
+            scheduleSave(scope, immediate ? { immediate: true } : undefined);
+            enforceFoldersTopOrder();
+        };
+        scope.folderManager.setChangeHandler(onStructureChange);
+        scope.historyManager.setChangeHandler(onStructureChange);
+    }
+
+    /**
+     * Build a folder tree over one chat list. `projectId` is null for the sidebar's own list.
+     * The scope is live immediately; `scope.ready` resolves once the stored layout is applied.
+     */
+    function createScope(historyDiv, projectId) {
+        const scope = {
+            projectId: projectId || null,
+            historyDiv,
+            scanScheduled: false,
+            disposed: false,
+            observer: null
+        };
+        if (projectId) {
+            site.registerRowContainer(historyDiv);
+            site.markProjectContainer(historyDiv, projectId);
+        } else {
+            site.setHistoryContainer(historyDiv);
         }
-        historyScanScheduled = false;
+
+        scope.historyManager = new HistoryManager();
+        scope.folderManager = new FolderManager(historyDiv, scope.historyManager, folderMenu);
+        scope.dragController = new DragController(
+            historyDiv,
+            scope.historyManager,
+            scope.folderManager
+        );
+        scope.layoutState = new LayoutState(
+            storageService,
+            scope.folderManager,
+            scope.historyManager,
+            { keyPrefix: site.projectKeyPrefix(projectId) }
+        );
+
+        scopes.push(scope);
+        makeRootLinksDraggable(scope);
+        applyProjectIndent(scope);
+
+        // Only the project you are actually looking at gets a starter folder: seeding one into
+        // every project's list the moment its chats render would rewrite parts of the sidebar
+        // the user never asked us to touch.
+        const seedInitialFolder = !projectId || projectId === site.currentProjectId();
+
+        scope.ready = scope.layoutState.restore()
+            .catch(() => {})
+            .then(() => {
+                if (scope.disposed) return scope;
+                if (!scope.folderManager.folders.length && seedInitialFolder) {
+                    scope.folderManager.createInitialFolder("New Folder");
+                }
+                bindScopeChangeHandlers(scope);
+                observeHistory(scope);
+                return scope;
+            });
+        return scope;
+    }
+
+    /** The tree that owns a folder, so one shared menu can act on any of them. */
+    function scopeForFolder(folderItem) {
+        if (!folderItem) return null;
+        return scopes.find((scope) =>
+            scope.folderManager && !!scope.folderManager.getRecordByFolderItem(folderItem)) || null;
+    }
+
+    function wireFolderMenu() {
+        folderMenu.onNew = (folderItem) => {
+            const scope = scopeForFolder(folderItem);
+            if (!scope) return;
+            const newFolder = scope.folderManager.createFolder("New Folder", {
+                parentFolder: folderItem,
+                insertAtTop: true
+            });
+            if (newFolder) {
+                if (typeof folderItem.setExpanded === "function") {
+                    folderItem.setExpanded(true);
+                }
+                if (typeof newFolder.inlineRename === "function") {
+                    newFolder.inlineRename();
+                }
+            }
+            scheduleSave(scope, { immediate: true });
+        };
+        folderMenu.onRename = (folderItem) => {
+            folderItem.inlineRename();
+        };
+        folderMenu.onChangeColor = (folderItem, color) => {
+            if (folderItem && typeof folderItem.setColor === "function") {
+                folderItem.setColor(color);
+            }
+            // Persistence handled via layout state change handlers
+        };
+        folderMenu.onExpandAll = () => setAllFoldersExpanded(true);
+        folderMenu.onCollapseAll = () => setAllFoldersExpanded(false);
+        folderMenu.onDelete = (folderItem) => {
+            const scope = scopeForFolder(folderItem);
+            if (scope) {
+                scope.folderManager.deleteFolder(folderItem);
+            }
+        };
+    }
+
+    function disposeScope(scope) {
+        scope.disposed = true;
+        if (scope.observer) {
+            scope.observer.disconnect();
+            scope.observer = null;
+        }
+        if (scope.layoutState) {
+            scope.layoutState.dispose();
+        }
+        if (scope.folderManager) {
+            scope.folderManager.destroy();
+        }
+        if (scope.historyManager) {
+            scope.historyManager.setChangeHandler(null);
+        }
+        if (scope.projectId) {
+            site.unregisterRowContainer(scope.historyDiv);
+        }
+        const index = scopes.indexOf(scope);
+        if (index !== -1) {
+            scopes.splice(index, 1);
+        }
+    }
+
+    /**
+     * Adopt project chat lists that have appeared and drop the ones the host app has removed.
+     * A project list comes and goes as the user expands, collapses and navigates, so this runs
+     * on the same cheap interval as the sidebar container check.
+     */
+    function reconcileProjectScopes() {
+        if (!site.supportsProjectFolders() || !sidebarScope) return;
+
+        scopes
+            .filter((scope) => scope.projectId && !document.contains(scope.historyDiv))
+            .forEach(disposeScope);
+
+        const seen = new Set(scopes.filter((s) => s.projectId).map((s) => s.projectId));
+        site.findProjectChatLists().forEach(({ projectId, container }) => {
+            if (seen.has(projectId)) return;
+            if (scopes.some((scope) => scope.historyDiv === container)) return;
+            seen.add(projectId);
+            const scope = createScope(container, projectId);
+            scope.ready.then(() => {
+                if (!scope.disposed) {
+                    console.info(LOG, `folders ready in project ${projectId}`);
+                }
+            });
+        });
     }
 
     function handleGlobalShortcuts(event) {
-        if (!folderManager) return;
+        if (!scopes.length) return;
         const active = document.activeElement;
         if (active) {
             const tag = (active.tagName || "").toLowerCase();
@@ -608,25 +826,23 @@
         }
         if (event.ctrlKey && event.key === "\\") {
             event.preventDefault();
-            const changed = folderManager.setAllFoldersExpanded(false);
-            if (changed) {
-                scheduleSave({ immediate: true });
-            }
+            setAllFoldersExpanded(false);
         }
     }
 
     function startContainerMonitor() {
-        if (!ENABLE_SAFE_REINIT) return;
         stopContainerMonitor();
         containerMonitorTimer = setInterval(() => {
-            if (!historyDiv || !document.contains(historyDiv)) {
+            if (ENABLE_SAFE_REINIT &&
+                (!sidebarScope || !document.contains(sidebarScope.historyDiv))) {
                 scheduleReinit("container-detached");
+                return;
             }
+            reconcileProjectScopes();
         }, 1000);
     }
 
     function stopContainerMonitor() {
-        if (!ENABLE_SAFE_REINIT) return;
         if (containerMonitorTimer) {
             clearInterval(containerMonitorTimer);
             containerMonitorTimer = null;
@@ -638,14 +854,14 @@
         if (safeModeActive) return;
         safeModeActive = true;
         console.warn("[NestFolders] Entering safe mode:", reason);
-        if (folderManager) {
+        if (sidebarScope && sidebarScope.folderManager) {
             try {
-                folderManager.suspendNotifications();
-                folderManager.clearAllFolders();
+                sidebarScope.folderManager.suspendNotifications();
+                sidebarScope.folderManager.clearAllFolders();
             } catch (err) {
                 console.warn("[NestFolders] Failed to clear folders during safe mode", err);
             } finally {
-                folderManager.resumeNotifications();
+                sidebarScope.folderManager.resumeNotifications();
             }
         }
     }
@@ -660,50 +876,33 @@
         if (reinitPending) return;
         reinitPending = true;
         console.warn("[NestFolders] Reinitialising folders:", reason);
-        stopHistoryObserver();
         stopContainerMonitor();
         stopThemeWatcher();
         hideDropMarker();
+        scopes.slice().forEach(disposeScope);
+        sidebarScope = null;
         site.setHistoryContainer(null);
         if (ENABLE_SIDEBAR_RESIZER) {
             teardownSidebarResizer();
         }
-        historyManager = null;
-        folderManager = null;
-        folderMenu = null;
-        dragController = null;
-        layoutState = null;
         storageService = null;
         globalSettings = null;
         setTimeout(() => {
             reinitPending = false;
-            historyDiv = null;
             init();
         }, 300);
     }
 
-    function initOnceHistoryFound() {
-        site.setHistoryContainer(historyDiv);
-        historyManager = new HistoryManager();
-        folderMenu = new FolderMenu();
-        folderManager = new FolderManager(historyDiv, historyManager, folderMenu);
-        ns.folderManager = folderManager;
-        ns.historyManager = historyManager;
-        ns.historyDiv = historyDiv;
-        dragController = new DragController(
-            historyDiv,
-            historyManager,
-            folderManager
-        );
-        ns.dragController = dragController;
-
+    function initOnceHistoryFound(historyDiv) {
         storageService = new StorageService({
             area: "sync",
             storageKey: "glynGptState"
         });
         globalSettings = new GlobalSettings(storageService);
-        layoutState = new LayoutState(storageService, folderManager, historyManager);
-        ns.layoutState = layoutState;
+        folderMenu = new FolderMenu();
+        wireFolderMenu();
+
+        site.setHistoryContainer(historyDiv);
         if (ENABLE_SIDEBAR_RESIZER) {
             setupSidebarResizer();
         }
@@ -717,100 +916,40 @@
             .then(() => applyGlobalSettings())
             .catch(() => applyGlobalSettings());
 
-        // Wire draggable behaviour
+        // Wire draggable behaviour. The handlers are static, so they route to whichever tree
+        // owns the container being dropped into.
         DraggableElement.showDropMarker = showDropMarker;
         DraggableElement.hideDropMarker = hideDropMarker;
         DraggableElement.highlightDropTarget = highlightFolderRow;
         DraggableElement.unhighlightDropTarget = unhighlightFolderRow;
         DraggableElement.setDropHandler((source, target, containerEl, evt) => {
-            dragController.handleDrop(source, target, containerEl, evt);
+            const scope = scopeForNode(containerEl) ||
+                (source && scopeForNode(source.el));
+            if (!scope) return;
+            // A chat belongs to exactly one list; dragging one across trees would file a chat
+            // in a project it is not part of, so those drops are simply ignored.
+            if (source && source.el && scopeForNode(source.el) !== scope) return;
+            scope.dragController.handleDrop(source, target, containerEl, evt);
         });
 
-        // Folder menu callbacks
-        folderMenu.onNew = (folderItem) => {
-            const newFolder = folderManager.createFolder("New Folder", {
-                parentFolder: folderItem,
-                insertAtTop: true
-            });
-            if (newFolder) {
-                if (typeof folderItem.setExpanded === "function") {
-                    folderItem.setExpanded(true);
-                }
-                if (typeof newFolder.inlineRename === "function") {
-                    newFolder.inlineRename();
-                }
-            }
-            scheduleSave({ immediate: true });
-        };
-        folderMenu.onRename = (folderItem) => {
-            folderItem.inlineRename();
-        };
-        folderMenu.onChangeColor = (folderItem, color) => {
-            if (folderItem && typeof folderItem.setColor === "function") {
-                folderItem.setColor(color);
-            }
-            // Persistence handled via layout state change handlers
-        };
-        folderMenu.onExpandAll = () => {
-            if (folderManager.setAllFoldersExpanded(true)) {
-                scheduleSave({ immediate: true });
-            }
-        };
-        folderMenu.onCollapseAll = () => {
-            if (folderManager.setAllFoldersExpanded(false)) {
-                scheduleSave({ immediate: true });
-            }
-        };
-        folderMenu.onDelete = (folderItem) => {
-            folderManager.deleteFolder(folderItem);
-        };
+        // The sidebar's own tree. `ns.*` keeps pointing at it, so anything that only ever knew
+        // about one folder tree (popup handlers, tests) is unaffected by project trees.
+        sidebarScope = createScope(historyDiv, null);
+        ns.folderManager = sidebarScope.folderManager;
+        ns.historyManager = sidebarScope.historyManager;
+        ns.dragController = sidebarScope.dragController;
+        ns.layoutState = sidebarScope.layoutState;
+        ns.historyDiv = sidebarScope.historyDiv;
+        ns.scopes = scopes;
 
-        makeRootLinksDraggable();
-
-        const bindChangeHandlers = () => {
-            const immediateReasons = new Set([
-                "folder-rename",
-                "folder-color",
-                "folder-children",
-                "create-folder",
-                "delete-folder",
-                "move-folder",
-                "expand-all",
-                "collapse-all",
-                "ensure",
-                "move",
-                "remove",
-                "set-order"
-            ]);
-            const onStructureChange = (reason) => {
-                const immediate = immediateReasons.has(reason);
-                scheduleSave(immediate ? { immediate: true } : undefined);
-                enforceFoldersTopOrder();
-            };
-            folderManager.setChangeHandler(onStructureChange);
-            historyManager.setChangeHandler(onStructureChange);
-        };
-
-        layoutState.restore()
-            .then(() => {
-                if (!folderManager.folders.length) {
-                    folderManager.createInitialFolder("New Folder");
-                }
-            })
-            .catch(() => {
-                if (!folderManager.folders.length) {
-                    folderManager.createInitialFolder("New Folder");
-                }
-            })
-            .finally(() => {
-                bindChangeHandlers();
-                enforceFoldersTopOrder();
-                observeHistory();
-                startContainerMonitor();
-                refreshThemeClass();
-                exitSafeMode();
-                console.info(LOG, `folders ready on ${site.label}`);
-            });
+        sidebarScope.ready.then(() => {
+            enforceFoldersTopOrder();
+            reconcileProjectScopes();
+            startContainerMonitor();
+            refreshThemeClass();
+            exitSafeMode();
+            console.info(LOG, `folders ready on ${site.label}`);
+        });
     }
 
     // Both hosts are single-page apps: the sidebar can appear long after document_idle (slow
@@ -821,10 +960,10 @@
         let warned = false;
 
         function check() {
-            historyDiv = findHistoryContainer();
+            const historyDiv = site.findHistoryContainer();
 
             if (historyDiv) {
-                initOnceHistoryFound();
+                initOnceHistoryFound(historyDiv);
                 return;
             }
 

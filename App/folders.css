@@ -80,6 +80,16 @@ html.glyn-theme-light {
   position: relative;
 }
 
+/*
+ * Rows in a project's chat list are inset by the host app (ChatGPT nests them under the
+ * project row). A folder is a sibling of those rows, so it has to start from the same inset or
+ * it hangs out to the left of the chats it contains. The value is measured off a real chat row
+ * at runtime - see applyProjectIndent in main.js - rather than hard-coded to a host's spacing.
+ */
+[data-glyn-project-scope] > .glyn-folder-wrapper {
+  margin-inline-start: var(--glyn-project-indent, 0px);
+}
+
 .glyn-folder-hover-band {
   position: absolute;
   left: 0;

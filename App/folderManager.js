@@ -25,6 +25,27 @@
       this.onChange = fn;
     }
 
+    /**
+     * Release everything that outlives the chat list itself. A project's list is mounted and
+     * unmounted repeatedly over one page's lifetime, so the confirm dialog and its document-level
+     * key handler have to go with it rather than accumulate.
+     */
+    destroy() {
+      this.onChange = null;
+      if (this._confirmKeyHandler) {
+        document.removeEventListener("keydown", this._confirmKeyHandler);
+        this._confirmKeyHandler = null;
+      }
+      this._closeConfirmDialog(false);
+      if (this._confirmBackdrop && this._confirmBackdrop.parentNode) {
+        this._confirmBackdrop.parentNode.removeChild(this._confirmBackdrop);
+      }
+      this._confirmBackdrop = null;
+      this._confirmDialog = null;
+      this._confirmCancelBtn = null;
+      this._confirmDeleteBtn = null;
+    }
+
     suspendNotifications() {
       this._suspendCount += 1;
     }

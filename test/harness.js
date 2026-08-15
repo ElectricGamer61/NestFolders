@@ -31,12 +31,51 @@ function manifestScriptOrder() {
     return manifest.content_scripts[0].js;
 }
 
-/** ChatGPT renders each conversation as a top-level <a class="__menu-item"> inside #history. */
+/**
+ * The ChatGPT layout the extension was originally written against: each conversation is a
+ * top-level <a class="__menu-item"> directly inside #history. Kept as a fixture because users
+ * on that build must keep working.
+ */
 function chatgptSidebar(chats) {
     const items = chats
         .map((chat) => `<a class="__menu-item" href="${chat.href}">${chat.title}</a>`)
         .join("");
     return `<nav aria-label="Chat history"><div id="history">${items}</div></nav>`;
+}
+
+/**
+ * Current ChatGPT markup, transcribed from a signed-in sidebar capture: rows are wrapped in
+ * `#history > ul > li`, and each project is an expando whose body holds that project's own
+ * chat list. A project chat's href carries the project id (`/g/g-p-<id>/c/<uuid>`) while the
+ * project's own sidebar link carries id *and* slug (`/g/g-p-<id>-<slug>/project`).
+ */
+function chatgptRow(chat, extraClass = "") {
+    return `<li class="list-none"><a class="group __menu-item hoverable${extraClass}"` +
+        ` data-sidebar-item="true" href="${chat.href}">` +
+        `<div class="flex min-w-0 grow items-center"><div class="truncate">` +
+        `<span dir="auto">${chat.title}</span></div></div>` +
+        `<div class="trailing"><button data-conversation-options-trigger="x">...</button></div>` +
+        `</a></li>`;
+}
+
+function chatgptModernSidebar(chats, options) {
+    const projects = (options && options.projects) || [];
+    const projectSections = projects.map((project, index) => {
+        const rows = project.chats.map((chat) => chatgptRow(chat, " ps-9")).join("");
+        return `<li class="list-none">` +
+            `<a class="group __menu-item hoverable" data-sidebar-item="true"` +
+            ` href="/g/${project.id}-${project.slug}/project">${project.name}</a>` +
+            `<div id="_r_${index}_" class="overflow-hidden">` +
+            `<ul class="m-0 list-none p-0">${rows}</ul></div></li>`;
+    }).join("");
+
+    const history = chats.map((chat) => chatgptRow(chat)).join("");
+    return `<nav aria-label="Chat history">
+        ${projects.length
+            ? `<div class="sidebar-expando-section"><ul class="m-0 list-none p-0">${projectSections}</ul></div>`
+            : ""}
+        <div id="history"><ul class="m-0 list-none p-0">${history}</ul></div>
+      </nav>`;
 }
 
 /**
@@ -58,6 +97,7 @@ function claudeSidebar(chats) {
 
 const FIXTURES = {
     chatgpt: { url: "https://chatgpt.com/", body: chatgptSidebar },
+    "chatgpt-modern": { url: "https://chatgpt.com/", body: chatgptModernSidebar },
     claude: { url: "https://claude.ai/new", body: claudeSidebar }
 };
 
@@ -99,14 +139,17 @@ function createChromeStub(store) {
 /**
  * Load the extension into a fresh page.
  *
- * @param {"chatgpt"|"claude"} siteKey
+ * @param {"chatgpt"|"chatgpt-modern"|"claude"} siteKey
  * @param {Array<{href: string, title: string}>} chats
  * @param {object} store shared chrome.storage.sync contents (mutated in place)
+ * @param {object} [options] `projects` for the fixture, `url` to override the page address
+ *                           (which is how the extension knows which project you are viewing)
  */
-async function loadExtension(siteKey, chats, store) {
+async function loadExtension(siteKey, chats, store, options) {
     const fixture = FIXTURES[siteKey];
-    const dom = new JSDOM(`<!doctype html><html><body>${fixture.body(chats)}</body></html>`, {
-        url: fixture.url,
+    const opts = options || {};
+    const dom = new JSDOM(`<!doctype html><html><body>${fixture.body(chats, opts)}</body></html>`, {
+        url: opts.url || fixture.url,
         pretendToBeVisual: true,
         // Gives window.eval a real window scope; we inject the content scripts ourselves
         // rather than letting the page run any script of its own.
